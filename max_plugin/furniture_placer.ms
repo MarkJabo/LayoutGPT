@@ -159,7 +159,7 @@ rollout ro_Setup "1 · LLM Setup" width:420
         else lbl_olStatus.text = "Status: Not installed"
 
         -- Pre-fill OpenAI key from env if set
-        local sysKey = systemEnvironmentVariable "OPENAI_API_KEY"
+        local sysKey = getenv "OPENAI_API_KEY"
         if sysKey != undefined and sysKey != "" do et_oaiKey.text = sysKey
     )
 
