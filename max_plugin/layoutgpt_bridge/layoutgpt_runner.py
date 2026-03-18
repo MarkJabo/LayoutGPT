@@ -127,12 +127,19 @@ def _build_few_shot_messages(examples: list[dict]) -> list[dict]:
 
 class LayoutGPTRunner:
     """
-    Wraps OpenAI API calls to produce LayoutGPT-compatible 3D placements.
+    Wraps an OpenAI-compatible Chat API to produce LayoutGPT 3D placements.
+
+    Works with OpenAI, Ollama (local), LM Studio, or any OpenAI-compatible
+    endpoint by setting base_url.
 
     Parameters
     ----------
-    api_key         : OpenAI API key (falls back to OPENAI_API_KEY env var)
-    model           : chat model name, default "gpt-4o"
+    api_key         : API key.  For Ollama pass "ollama" (any non-empty string).
+                      Falls back to OPENAI_API_KEY env var.
+    model           : chat model name, e.g. "gpt-4o" or "llama3.2:3b"
+    base_url        : API base URL.  None → OpenAI default.
+                      Ollama: "http://localhost:11434/v1"
+                      LM Studio: "http://localhost:1234/v1"
     temperature     : sampling temperature (default 0.7)
     max_tokens      : max completion tokens (default 1024)
     max_retries     : number of API retries on transient errors
@@ -142,6 +149,7 @@ class LayoutGPTRunner:
         self,
         api_key: str | None = None,
         model: str = "gpt-4o",
+        base_url: str | None = None,
         temperature: float = 0.7,
         max_tokens: int = 1024,
         max_retries: int = 4,
@@ -154,9 +162,15 @@ class LayoutGPTRunner:
         resolved_key = api_key or os.environ.get("OPENAI_API_KEY", "")
         if not resolved_key:
             raise ValueError(
-                "No OpenAI API key provided.  Pass api_key= or set OPENAI_API_KEY."
+                "No API key provided.  For Ollama use 'ollama' as the key; "
+                "for OpenAI pass your sk- key or set OPENAI_API_KEY."
             )
-        self._client = openai.OpenAI(api_key=resolved_key)
+
+        client_kwargs: dict[str, Any] = {"api_key": resolved_key}
+        if base_url:
+            client_kwargs["base_url"] = base_url
+
+        self._client = openai.OpenAI(**client_kwargs)
 
     # ------------------------------------------------------------------
     # Public entry point

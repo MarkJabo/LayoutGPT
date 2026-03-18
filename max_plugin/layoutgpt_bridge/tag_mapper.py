@@ -214,3 +214,23 @@ def layoutgpt_room_key(room_type: str) -> str:
     if room_type == "bedroom":
         return "bedroom"
     return "livingroom"
+
+
+# ---------------------------------------------------------------------------
+# Full sorted list of every LayoutGPT / 3D-FUTURE category
+# Used to populate UI dropdowns; order is bedroom types first, then living-room
+# ---------------------------------------------------------------------------
+ALL_LAYOUTGPT_CATEGORIES: list[str] = sorted({
+    # Bedroom
+    "single_bed", "double_bed", "kids_bed",
+    "wardrobe", "dresser", "cabinet", "shelf", "children_cabinet",
+    "nightstand", "dressing_table", "tv_stand", "table", "desk",
+    "chair", "dressing_chair", "stool", "armchair",
+    "ceiling_lamp", "floor_lamp", "pendant_lamp", "bookshelf",
+    # Living room (adds / overlaps)
+    "lounge_chair", "dining_chair",
+    "l_shaped_sofa", "loveseat_sofa", "multi_seat_sofa",
+    "coffee_table", "dining_table", "console_table",
+    "corner_side_table", "round_end_table",
+    "wine_cabinet",
+})
