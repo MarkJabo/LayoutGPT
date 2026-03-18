@@ -53,10 +53,18 @@ gFP_AllCats = #(
 )
 
 -- Python initialisation  (auto-installs openai package if missing) ------
+
+-- Convert gFP_Dir to a Python-safe path: forward slashes, no trailing sep
+fn fp_PyPath = (
+    local p = substituteString gFP_Dir "\\" "/"
+    if p.count > 0 and p[p.count] == "/" do p = substring p 1 (p.count - 1)
+    p
+)
+
 fn fp_InitPython = (
     local pyInit = (
         "import sys, os\n" +
-        "sys.path.insert(0, r'" + gFP_Dir + "')\n" +
+        "sys.path.insert(0, '" + fp_PyPath() + "')\n" +
         "from installer import ensure_dependencies\n" +
         "_ok, _msg = ensure_dependencies()\n" +
         "print('[FP]', _msg)\n"
@@ -148,7 +156,7 @@ rollout ro_Setup "1 · LLM Setup" width:420
     on ro_Setup open do (
         fp_InitPython()
         -- Check Ollama status
-        local chk = "import sys; sys.path.insert(0,r'" + gFP_Dir + "')\n" + \
+        local chk = "import sys; sys.path.insert(0,'" + fp_PyPath() + "')\n" + \
                     "from installer import ollama_status\n" + \
                     "running,installed = ollama_status()\n" + \
                     "print('RUNNING' if running else ('INSTALLED' if installed else 'MISSING'))\n"
@@ -166,7 +174,7 @@ rollout ro_Setup "1 · LLM Setup" width:420
     on btn_olStart pressed do (
         lbl_olStatus.text = "Starting Ollama…"
         windows.processPostedMessages()
-        local code = "import sys; sys.path.insert(0,r'" + gFP_Dir + "')\n" + \
+        local code = "import sys; sys.path.insert(0,'" + fp_PyPath() + "')\n" + \
                      "from installer import start_ollama\n" + \
                      "ok,msg = start_ollama()\n" + \
                      "print(msg)\n"
@@ -181,7 +189,7 @@ rollout ro_Setup "1 · LLM Setup" width:420
         lbl_pullMsg.text = "Downloading " + tag + " …  (may take several minutes)"
         prg_pull.value = 5
         windows.processPostedMessages()
-        local code = "import sys; sys.path.insert(0,r'" + gFP_Dir + "')\n" + \
+        local code = "import sys; sys.path.insert(0,'" + fp_PyPath() + "')\n" + \
                      "from installer import pull_model\n" + \
                      "ok,msg = pull_model('" + tag + "')\n" + \
                      "print(msg)\n"
@@ -352,7 +360,7 @@ rollout ro_Furniture "3 · Furniture Assets" width:420
             if not dup do (
                 -- Auto-detect category via Python tag_mapper
                 local catCode = (
-                    "import sys; sys.path.insert(0, r'" + gFP_Dir + "')\n" +
+                    "import sys; sys.path.insert(0, '" + fp_PyPath() + "')\n" +
                     "from layoutgpt_bridge.tag_mapper import normalize_tag\n" +
                     "cat = normalize_tag('" + nm + "') or 'armchair'\n" +
                     "print(cat)\n"
@@ -479,7 +487,7 @@ rollout ro_Generate "4 · Generate" width:420
 
         local pyCode = (
             "import sys, os\n" +
-            "sys.path.insert(0, r'" + gFP_Dir + "')\n" +
+            "sys.path.insert(0, '" + fp_PyPath() + "')\n" +
             "import furniture_placer as fp\n" +
             "cfg = {\n" +
             "    'backend'         : '" + backend + "',\n" +
