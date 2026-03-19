@@ -73,6 +73,19 @@ fn fp_InitPython = (
     catch ( print ("[FP] Python init error: " + getCurrentException()) )
 )
 
+-- Safe python.execute wrapper: always returns a string.
+-- python.execute returns the MAXScript value #success (not a string) when
+-- the Python code runs without error but produces no print output.
+-- Using #success with findString or string concatenation throws an exception.
+fn fp_PyRun code default:"" = (
+    local result = default
+    try (
+        local r = python.execute code
+        if classOf r == String then result = trimLeft (trimRight r)
+    ) catch ()
+    result
+)
+
 fn fp_RefreshRoomList lb = (
     local items = #()
     for r in gFP_Rooms do append items ("[" + r.roomType + "]  " + r.nodeName)
@@ -160,8 +173,7 @@ rollout ro_Setup "1 · LLM Setup" width:420
                     "from installer import ollama_status\n" + \
                     "running,installed = ollama_status()\n" + \
                     "print('RUNNING' if running else ('INSTALLED' if installed else 'MISSING'))\n"
-        local result = ""
-        try ( result = python.execute chk ) catch ()
+        local result = fp_PyRun chk
         if findString result "RUNNING"   != undefined then lbl_olStatus.text = "Status: ✓ Running"
         else if findString result "INSTALLED" != undefined then lbl_olStatus.text = "Status: Installed (not running)"
         else lbl_olStatus.text = "Status: Not installed"
@@ -178,8 +190,7 @@ rollout ro_Setup "1 · LLM Setup" width:420
                      "from installer import start_ollama\n" + \
                      "ok,msg = start_ollama()\n" + \
                      "print(msg)\n"
-        local msg = ""
-        try ( msg = python.execute code ) catch ( msg = getCurrentException() )
+        local msg = fp_PyRun code default:"(no response)"
         lbl_olStatus.text = "Status: " + msg
     )
 
@@ -193,8 +204,7 @@ rollout ro_Setup "1 · LLM Setup" width:420
                      "from installer import pull_model\n" + \
                      "ok,msg = pull_model('" + tag + "')\n" + \
                      "print(msg)\n"
-        local msg = ""
-        try ( msg = python.execute code ) catch ( msg = getCurrentException() )
+        local msg = fp_PyRun code default:"(no response)"
         prg_pull.value = 100
         lbl_pullMsg.text = msg
     )
@@ -365,8 +375,7 @@ rollout ro_Furniture "3 · Furniture Assets" width:420
                     "cat = normalize_tag('" + nm + "') or 'armchair'\n" +
                     "print(cat)\n"
                 )
-                local cat = "armchair"
-                try ( cat = trimRight (trimLeft (python.execute catCode)) ) catch ()
+                local cat = fp_PyRun catCode default:"armchair"
                 append gFP_Furniture (FP_Furn nodeName:nm category:cat roomAssign:"all" maxCopies:1)
                 added += 1
             )
@@ -505,7 +514,8 @@ rollout ro_Generate "4 · Generate" width:420
 
         local result = ""
         try (
-            result = python.execute pyCode
+            local r = python.execute pyCode
+            result = if classOf r == String then r else "Done."
             lbl_status.text = "Done."
         ) catch (
             result = "Python error: " + getCurrentException()
