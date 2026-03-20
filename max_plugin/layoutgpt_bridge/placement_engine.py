@@ -128,25 +128,24 @@ def _place_on_floor(node, room: RoomInfo, asset: "FurnitureAsset | None" = None)
     Snap the node's base (min Z) to the room floor level, preserving XY.
 
     Uses the prototype asset's pre-computed bounding box when available.
-    Reading `node.min.z` on a freshly instanced object returns a stale cached
-    value from the prototype's original position — 3ds Max defers bbox
-    invalidation. Using the prototype's bbox (computed at load time) is reliable
-    regardless of where either the prototype or instance currently sit.
-
     pivot_to_bottom = prototype.pos.z - prototype.bbox.min_z
-    → distance from pivot to the bottom face in any world position.
+    → distance from pivot to the bottom face.
     Then:  inst.pos.z = floor_z + pivot_to_bottom
     → instance's bottom face lands exactly on floor_z.
+
+    NOTE: In PyMXS, `node.pos.z = value` mutates a temporary Point3 copy and
+    does NOT move the node.  We must assign a new Point3 to `node.pos`.
     """
     try:
         if asset is not None:
             pivot_to_bottom = float(asset.node.pos.z) - float(asset.bbox.min_z)
         else:
-            # No prototype info — try reading instance bbox directly
             pivot_to_bottom = float(node.pos.z) - float(node.min.z)
-        node.pos.z = float(room.bbox.min_z) + pivot_to_bottom
+        new_z = float(room.bbox.min_z) + pivot_to_bottom
     except Exception:
-        node.pos.z = float(room.bbox.min_z)  # fallback: put pivot at floor level
+        new_z = float(room.bbox.min_z)
+    p = node.pos
+    node.pos = rt.Point3(float(p.x), float(p.y), new_z)
 
 
 # ---------------------------------------------------------------------------

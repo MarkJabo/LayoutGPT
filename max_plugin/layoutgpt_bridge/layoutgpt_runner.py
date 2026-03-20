@@ -20,7 +20,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -142,7 +141,6 @@ class LayoutGPTRunner:
                       LM Studio: "http://localhost:1234/v1"
     temperature     : sampling temperature (default 0.7)
     max_tokens      : max completion tokens (default 1024)
-    max_retries     : number of API retries on transient errors
     """
 
     def __init__(
@@ -152,12 +150,10 @@ class LayoutGPTRunner:
         base_url: str | None = None,
         temperature: float = 0.7,
         max_tokens: int = 1024,
-        max_retries: int = 1,
     ):
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
-        self.max_retries = max_retries
 
         resolved_key = api_key or os.environ.get("OPENAI_API_KEY", "")
         if not resolved_key:
@@ -216,43 +212,31 @@ class LayoutGPTRunner:
         return results
 
     # ------------------------------------------------------------------
-    # API call with retry
+    # API call (no retries – surface errors immediately so the UI stays
+    # responsive and the user knows exactly what went wrong)
     # ------------------------------------------------------------------
 
     def _call_api(self, messages: list[dict], n: int = 1) -> list[str]:
         """Call OpenAI chat API, return list of assistant content strings."""
-        delay = 2.0
-        last_exc: Exception | None = None
-
-        for attempt in range(self.max_retries + 1):
-            try:
-                resp = self._client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    temperature=self.temperature,
-                    max_tokens=self.max_tokens,
-                    top_p=1.0,
-                    frequency_penalty=0.0,
-                    presence_penalty=0.0,
-                    stop=["Condition:"],
-                    n=n,
-                )
-                return [choice.message.content for choice in resp.choices]
-            except openai.RateLimitError as exc:
-                # Rate limit – worth retrying after a short wait
-                last_exc = exc
-                print(f"[LayoutGPTRunner] RateLimitError – retry in {delay:.0f}s")
-            except openai.APIStatusError as exc:
-                # Auth / model / server error – retrying won't help, fail immediately
-                raise RuntimeError(f"API error {exc.status_code}: {exc.message}") from exc
-            except openai.APIConnectionError as exc:
-                # Network / endpoint unreachable – fail immediately so Max doesn't freeze
-                raise RuntimeError(f"Cannot reach API: {exc}") from exc
-
-            time.sleep(delay)
-            delay *= 2  # exponential back-off
-
-        raise RuntimeError(f"API still rate-limited after {self.max_retries} retries: {last_exc}")
+        try:
+            resp = self._client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
+                top_p=1.0,
+                frequency_penalty=0.0,
+                presence_penalty=0.0,
+                stop=["Condition:"],
+                n=n,
+            )
+            return [choice.message.content for choice in resp.choices]
+        except openai.RateLimitError as exc:
+            raise RuntimeError(f"Rate limited: {exc}") from exc
+        except openai.APIStatusError as exc:
+            raise RuntimeError(f"API error {exc.status_code}: {exc.message}") from exc
+        except openai.APIConnectionError as exc:
+            raise RuntimeError(f"Cannot reach API – check your endpoint/key: {exc}") from exc
 
     # ------------------------------------------------------------------
     # Response parser

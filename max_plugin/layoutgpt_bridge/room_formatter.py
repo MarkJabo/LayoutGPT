@@ -99,8 +99,9 @@ class RoomFormatter:
         return (
             f"Condition:\n"
             f"Room Type: {display_type}\n"
-            f"Room Size: max length {self.room_px_length}px,"
-            f" max width {self.room_px_width}px\n"
+            f"Room Size: max length {self.room_px_length}px, max width {self.room_px_width}px\n"
+            f"Constraints: left must be 0–{self.room_px_length}px; "
+            f"top must be 0–{self.room_px_width}px\n"
         )
 
     def room_stats(self) -> dict[str, Any]:
@@ -146,10 +147,15 @@ class RoomFormatter:
         """
         s = self._inv_scale  # px → scene units
 
-        # LayoutGPT "left" = X, "top" = Y (depth), "depth" = Z (height off floor)
-        pos_x = self._origin_x + float(placement["left"])  * s
-        pos_y = self._origin_y + float(placement["top"])   * s
+        # LayoutGPT "left" = X, "top" = Y (depth), "depth" = Z (height off floor).
+        # Clamp to room bounds: LLMs occasionally overshoot the canvas for
+        # non-square rooms, which would otherwise discard every placement.
+        pos_x = self._origin_x + float(placement["left"]) * s
+        pos_y = self._origin_y + float(placement["top"])  * s
         pos_z = self._floor_z  + float(placement.get("depth", 0.0)) * s
+
+        pos_x = max(self.room.bbox.min_x, min(self.room.bbox.max_x, pos_x))
+        pos_y = max(self.room.bbox.min_y, min(self.room.bbox.max_y, pos_y))
 
         dim_x = float(placement["length"]) * s
         dim_y = float(placement["width"])  * s
