@@ -128,7 +128,12 @@ def _place_on_floor(node, room: RoomInfo) -> None:
     Snap the node's base (min Z) to the room floor level, preserving XY.
     This corrects any Z offset from LayoutGPT's 'depth' coordinate.
     """
-    bbox_min_z = float(rt.nodeGetBoundingBox(node, rt.Matrix3(1))[0].z)
+    try:
+        # rt.matrix3(1) is the identity matrix in pymxs (lowercase required)
+        bbox_min_z = float(rt.nodeGetBoundingBox(node, rt.matrix3(1))[0].z)
+    except Exception:
+        # Fallback: treat current pivot as bbox base
+        bbox_min_z = float(node.pos.z)
     current_z  = float(node.pos.z)
     node.pos.z = current_z + (room.bbox.min_z - bbox_min_z)
 
@@ -223,31 +228,35 @@ class PlacementEngine:
 
             inst_name = _unique_instance_name(pl.category, room.name)
 
-            with pymxs.undo(True, f"Place {inst_name}"):
-                inst = _instance_node(asset.node, inst_name)
+            try:
+                with pymxs.undo(True, f"Place {inst_name}"):
+                    inst = _instance_node(asset.node, inst_name)
 
-                # Position
-                _set_position(inst,
-                               pl.scene["pos_x"],
-                               pl.scene["pos_y"],
-                               pl.scene["pos_z"])
+                    # Position
+                    _set_position(inst,
+                                   pl.scene["pos_x"],
+                                   pl.scene["pos_y"],
+                                   pl.scene["pos_z"])
 
-                # Rotation
-                _set_z_rotation(inst, pl.scene["rotation_deg"])
+                    # Rotation
+                    _set_z_rotation(inst, pl.scene["rotation_deg"])
 
-                # Optional scale-to-fit
-                if self.scale_to_fit:
-                    _scale_to_fit(inst, asset, pl.scene)
+                    # Optional scale-to-fit
+                    if self.scale_to_fit:
+                        _scale_to_fit(inst, asset, pl.scene)
 
-                # Snap base to floor
-                if self.snap_to_floor:
-                    _place_on_floor(inst, room)
+                    # Snap base to floor
+                    if self.snap_to_floor:
+                        _place_on_floor(inst, room)
 
-            placed_nodes.append(inst)
-            result.placed.append(inst_name)
-            print(f"[PlacementEngine] Placed {inst_name} at "
-                  f"({pl.scene['pos_x']:.1f}, {pl.scene['pos_y']:.1f}, {pl.scene['pos_z']:.1f}) "
-                  f"rot={pl.scene['rotation_deg']:.1f}°")
+                placed_nodes.append(inst)
+                result.placed.append(inst_name)
+                print(f"[PlacementEngine] Placed {inst_name} at "
+                      f"({pl.scene['pos_x']:.1f}, {pl.scene['pos_y']:.1f}, {pl.scene['pos_z']:.1f}) "
+                      f"rot={pl.scene['rotation_deg']:.1f}°")
+            except Exception as exc:
+                print(f"[PlacementEngine] ERROR placing {inst_name}: {exc}")
+                result.skipped.append(pl.category)
 
         # Group all placed instances under one container
         if placed_nodes:

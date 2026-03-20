@@ -179,8 +179,14 @@ rollout ro_Setup "1 · LLM Setup" width:420
         else lbl_olStatus.text = "Status: Not installed"
 
         -- Pre-fill OpenAI key from env if set
-        local sysKey = getenv "OPENAI_API_KEY"
-        if sysKey != undefined and sysKey != "" do et_oaiKey.text = sysKey
+        -- Use dotNet for reliable env var reading across Max 2024-2026
+        try (
+            local sysKey = (dotNetClass "System.Environment").GetEnvironmentVariable "OPENAI_API_KEY"
+            if sysKey != undefined then (
+                local sysKeyStr = sysKey.ToString()
+                if sysKeyStr != "" do et_oaiKey.text = sysKeyStr
+            )
+        ) catch ()
     )
 
     on btn_olStart pressed do (
@@ -206,7 +212,14 @@ rollout ro_Setup "1 · LLM Setup" width:420
                      "print(msg)\n"
         local msg = fp_PyRun code default:"(no response)"
         prg_pull.value = 100
-        lbl_pullMsg.text = msg
+        -- Append where Ollama stores models so the user can verify
+        local ollamaModelsPath = (dotNetClass "System.Environment").GetEnvironmentVariable "USERPROFILE"
+        local pathStr = ""
+        try ( pathStr = ollamaModelsPath.ToString() ) catch ()
+        if pathStr != "" then
+            lbl_pullMsg.text = msg + "  |  Models stored at: " + pathStr + "\\.ollama\\models"
+        else
+            lbl_pullMsg.text = msg
     )
 
     on btn_olGet pressed do (
