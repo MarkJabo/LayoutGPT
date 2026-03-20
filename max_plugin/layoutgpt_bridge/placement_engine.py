@@ -257,14 +257,38 @@ class PlacementEngine:
                 with pymxs.undo(True, f"Place {inst_name}"):
                     inst = _instance_node(asset.node, inst_name)
 
-                    # Position
+                    # Compute pivot→bbox-center offset from prototype's stable bbox.
+                    # The LLM-supplied pos_x/pos_y are BBOX CENTER positions, but
+                    # node.pos sets the PIVOT.  If the prototype mesh is offset from
+                    # its pivot we must subtract that offset (rotated by the final
+                    # Z angle) so the bbox center lands at the desired position.
+                    proto_pivot_x = float(asset.node.pos.x)
+                    proto_pivot_y = float(asset.node.pos.y)
+                    bbox_cx = (float(asset.bbox.min_x) + float(asset.bbox.max_x)) / 2.0
+                    bbox_cy = (float(asset.bbox.min_y) + float(asset.bbox.max_y)) / 2.0
+                    local_ox = bbox_cx - proto_pivot_x
+                    local_oy = bbox_cy - proto_pivot_y
+
+                    # Rotate offset by the total Z angle so it matches final orientation
+                    total_deg = pl.scene["rotation_deg"] + asset.rotation_offset
+                    rad = _deg_to_rad(total_deg)
+                    cos_r = math.cos(rad)
+                    sin_r = math.sin(rad)
+                    offset_x = cos_r * local_ox - sin_r * local_oy
+                    offset_y = sin_r * local_ox + cos_r * local_oy
+                    print(f"[PlacementEngine] {inst_name} "
+                          f"local_offset=({local_ox:.1f},{local_oy:.1f})  "
+                          f"rot={total_deg:.1f}°  "
+                          f"world_offset=({offset_x:.1f},{offset_y:.1f})")
+
+                    # Position: move pivot so bbox-center lands at desired position
                     _set_position(inst,
-                                   pl.scene["pos_x"],
-                                   pl.scene["pos_y"],
+                                   pl.scene["pos_x"] - offset_x,
+                                   pl.scene["pos_y"] - offset_y,
                                    pl.scene["pos_z"])
 
                     # Rotation: LLM angle + per-asset import-direction correction
-                    _set_z_rotation(inst, pl.scene["rotation_deg"] + asset.rotation_offset)
+                    _set_z_rotation(inst, total_deg)
 
                     # Optional scale-to-fit
                     if self.scale_to_fit:
