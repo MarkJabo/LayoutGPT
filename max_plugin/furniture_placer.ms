@@ -397,6 +397,9 @@ rollout ro_Furniture "3 · Furniture Assets" width:420
     )
 
     on ro_Furniture open do (
+        -- Migrate any legacy FP_Furn structs that pre-date the baseRotOffset
+        -- field before touching the list (prevents "Unknown property" crash).
+        fp_MigrateFurniture()
         ddl_cat.items = gFP_AllCats
         fp_RefreshFurnList lb_furn
         _furnitureDetail()
