@@ -193,11 +193,41 @@ def _placement_zone(cat: str) -> str:
     return "anywhere"
 
 
+def _required_items_block(
+    available_furniture: list[str],
+    category_counts: dict[str, int] | None,
+) -> str:
+    """
+    Build the closing IMPORTANT instruction that explicitly lists every item
+    the LLM must output, including how many CSS lines to write for categories
+    with max_instances > 1.
+    """
+    counts = category_counts or {}
+    lines = []
+    total_lines = 0
+    for cat in available_furniture:
+        n = counts.get(cat, 1)
+        total_lines += n
+        if n == 1:
+            lines.append(f"  1 × {cat}")
+        else:
+            lines.append(f"  {n} × {cat}  ← output {n} separate CSS lines at different positions")
+    item_list = "\n".join(lines)
+    return (
+        f"IMPORTANT: You MUST output exactly {total_lines} CSS lines in total:\n"
+        f"{item_list}\n"
+        "Do NOT skip any item. Do NOT add items not listed above.\n"
+        "Multiple copies of the same category must be spread across the room "
+        "and must not overlap each other.\n"
+    )
+
+
 def _build_system_prompt(
     available_furniture: list[str],
     class_freq: dict[str, float],
     asset_sizes: dict[str, dict[str, int]] | None = None,
     room_type: str = "bedroom",
+    category_counts: dict[str, int] | None = None,
 ) -> str:
     freq_str = "; ".join(
         f"{obj}: {round(class_freq.get(obj, 0.0), 4)}" for obj in available_furniture
@@ -299,13 +329,12 @@ def _build_system_prompt(
         "- Do NOT place two items at the same (left, top) position.\n"
         "- depth = 0 for all floor-standing furniture.\n"
         "- Items must NOT overlap; maintain at least a 5px gap between bounding boxes.\n"
+        "  Space multiple copies of the same category evenly along the wall.\n"
         "Orientation: 0, 90, 180, or 270 degrees.\n"
         "CRITICAL — orientation 90°/270° SWAPS length and width in the floor footprint:\n"
         "  A length=93, width=28 item at orientation=90 occupies 28px left–right "
         "and 93px top–bottom.  Recalculate wall margins after any rotation.\n"
-        f"IMPORTANT: Output exactly one line for EACH of the "
-        f"{len(available_furniture)} available furniture categories. "
-        f"Do not skip any category.\n"
+        + _required_items_block(available_furniture, category_counts)
     )
 
 
@@ -456,6 +485,7 @@ class LayoutGPTRunner:
         few_shot_examples: list[dict] | None = None,
         n_results: int = 1,
         asset_sizes: dict[str, dict[str, int]] | None = None,
+        category_counts: dict[str, int] | None = None,
     ) -> list[list[Placement]]:
         """
         Generate furniture placements for a room.
@@ -473,9 +503,11 @@ class LayoutGPTRunner:
         list of length n_results; each element is a list[Placement] for one layout.
         """
         print(f"[LayoutGPTRunner] Available categories: {available_categories}")
+        print(f"[LayoutGPTRunner] Category counts: {category_counts}")
         system_msg = _build_system_prompt(
             available_categories, class_frequencies, asset_sizes,
             room_type=formatter.room.room_type,
+            category_counts=category_counts,
         )
         if few_shot_examples is None:
             few_shot_examples = _default_few_shot_examples(formatter.room.room_type)
