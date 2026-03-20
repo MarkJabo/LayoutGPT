@@ -18,6 +18,7 @@ Public surface
 from __future__ import annotations
 
 import json
+import math as _math
 import os
 import random as _random
 import re
@@ -98,6 +99,39 @@ def _parse_3d_line(line: str, unit: str = "px") -> tuple[str, dict[str, float]] 
 
 
 # ---------------------------------------------------------------------------
+# Overlap detection
+# ---------------------------------------------------------------------------
+
+def _overlapping_pairs(placements: list["Placement"], margin: float = 5.0) -> list[tuple[str, str]]:
+    """
+    Return a list of (cat_a, cat_b) pairs whose world-space AABBs overlap.
+
+    Uses axis-aligned bounding boxes computed from the wall-clamped scene
+    position and rotated half-extents, with a small margin to ignore
+    near-zero-contact touching.
+    """
+    boxes = []
+    for p in placements:
+        x  = p.scene["pos_x"]
+        y  = p.scene["pos_y"]
+        a  = _math.radians(p.scene.get("rotation_deg", 0.0))
+        ca, sa = abs(_math.cos(a)), abs(_math.sin(a))
+        hx = ca * p.scene["dim_x"] / 2 + sa * p.scene["dim_y"] / 2
+        hy = sa * p.scene["dim_x"] / 2 + ca * p.scene["dim_y"] / 2
+        boxes.append((p.category, x - hx, x + hx, y - hy, y + hy))
+
+    overlaps = []
+    for i in range(len(boxes)):
+        for j in range(i + 1, len(boxes)):
+            cat_a, ax1, ax2, ay1, ay2 = boxes[i]
+            cat_b, bx1, bx2, by1, by2 = boxes[j]
+            if (ax1 + margin < bx2 and ax2 - margin > bx1 and
+                    ay1 + margin < by2 and ay2 - margin > by1):
+                overlaps.append((cat_a, cat_b))
+    return overlaps
+
+
+# ---------------------------------------------------------------------------
 # System / user prompt builders  (mirrors form_prompt_for_chatgpt)
 # ---------------------------------------------------------------------------
 
@@ -152,12 +186,14 @@ def _build_system_prompt(
         "- Place small items (tables, lamps, chairs) away from walls, in the middle.\n"
         "- Do NOT place two items at the same (left, top) position.\n"
         "- depth should be 0 for all floor-standing furniture.\n"
-        "Orientation rules (furniture must FACE INTO the room, not into the wall):\n"
-        "- Item against top wall    (top ≈ 0):   orientation = 180 degrees\n"
-        "- Item against bottom wall (top ≈ max):  orientation = 0 degrees\n"
-        "- Item against left wall   (left ≈ 0):   orientation = 90 degrees\n"
-        "- Item against right wall  (left ≈ max): orientation = 270 degrees\n"
-        "- Items in the middle of the room may face any direction.\n"
+        "Orientation: you may use 0, 90, 180, or 270 degrees to vary the layout.\n"
+        "CRITICAL — when an item is rotated 90° or 270°, its footprint SWAPS: "
+        "it will occupy WIDTH pixels in the horizontal (left) direction and "
+        "LENGTH pixels in the vertical (top) direction.\n"
+        "Example: a 93×28 item at orientation=90 is 28px wide and 93px tall — "
+        "so if placed at top=118 in a 146px-tall room it would extend to top=211 "
+        "which is OUT OF BOUNDS. Use orientation=0 or 180 for long items near "
+        "the top/bottom walls, and 90/270 only when the item fits in both axes.\n"
         f"IMPORTANT: You MUST output exactly one line for EACH of the "
         f"{len(available_furniture)} available furniture categories listed above. "
         f"Do not skip any category.\n"
@@ -257,23 +293,52 @@ class LayoutGPTRunner:
         """
         print(f"[LayoutGPTRunner] Available categories: {available_categories}")
         system_msg = _build_system_prompt(available_categories, class_frequencies, asset_sizes)
-        # Add a random variation tag so each request is unique — prevents OpenAI
-        # from returning a cached/identical response on repeated calls.
-        variation  = _random.randint(10000, 99999)
-        user_msg   = formatter.condition_prompt + f"Variation: {variation}\nLayout:\n"
-        print(f"[LayoutGPTRunner] User prompt:\n{user_msg}")
 
-        messages: list[dict] = [{"role": "system", "content": system_msg}]
-        if few_shot_examples:
-            messages.extend(_build_few_shot_messages(few_shot_examples))
-        messages.append({"role": "user", "content": user_msg})
+        _MAX_OVERLAP_RETRIES = 2
+        retry_hint = ""
 
-        raw_content = self._call_api(messages, n=n_results)
+        for attempt in range(_MAX_OVERLAP_RETRIES + 1):
+            # Unique variation tag busts OpenAI's prompt cache on every call.
+            variation = _random.randint(10000, 99999)
+            user_msg  = (
+                formatter.condition_prompt
+                + f"Variation: {variation}\n"
+                + retry_hint
+                + "Layout:\n"
+            )
+            if attempt == 0:
+                print(f"[LayoutGPTRunner] User prompt:\n{user_msg}")
 
-        results: list[list[Placement]] = []
-        for content in raw_content:
-            placements = self._parse_response(content, formatter)
-            results.append(placements)
+            messages: list[dict] = [{"role": "system", "content": system_msg}]
+            if few_shot_examples:
+                messages.extend(_build_few_shot_messages(few_shot_examples))
+            messages.append({"role": "user", "content": user_msg})
+
+            raw_content = self._call_api(messages, n=n_results)
+
+            results: list[list[Placement]] = []
+            for content in raw_content:
+                placements = self._parse_response(content, formatter)
+                results.append(placements)
+
+            # Check the first result for overlaps; retry if found.
+            if results:
+                bad_pairs = _overlapping_pairs(results[0])
+                if bad_pairs:
+                    pair_str = ", ".join(f"{a}&{b}" for a, b in bad_pairs)
+                    print(f"[LayoutGPTRunner] Overlap detected ({pair_str}) "
+                          f"– retry {attempt + 1}/{_MAX_OVERLAP_RETRIES}")
+                    if attempt < _MAX_OVERLAP_RETRIES:
+                        retry_hint = (
+                            "IMPORTANT: the previous attempt had overlapping items "
+                            f"({pair_str}). Re-space them so no two items share "
+                            "floor area. Remember: rotating 90°/270° swaps "
+                            "length↔width in the top axis.\n"
+                        )
+                        continue
+
+            break  # no overlaps, or retries exhausted
+
         return results
 
     # ------------------------------------------------------------------
