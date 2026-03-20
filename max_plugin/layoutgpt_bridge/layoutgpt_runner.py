@@ -102,31 +102,39 @@ def _parse_3d_line(line: str, unit: str = "px") -> tuple[str, dict[str, float]] 
 # Overlap detection
 # ---------------------------------------------------------------------------
 
-def _overlapping_pairs(placements: list["Placement"], margin: float = 5.0) -> list[tuple[str, str]]:
+def _overlapping_pairs_px(
+    placements: list["Placement"],
+    margin_px: float = 2.0,
+) -> list[tuple[str, str]]:
     """
-    Return a list of (cat_a, cat_b) pairs whose world-space AABBs overlap.
+    Return (cat_a, cat_b) pairs whose *pixel-space* bounding boxes overlap.
 
-    Uses axis-aligned bounding boxes computed from the wall-clamped scene
-    position and rotated half-extents, with a small margin to ignore
-    near-zero-contact touching.
+    We check pixel space (the LLM's intended positions) rather than world
+    space so that wall-clamping artifacts don't produce false positives.
+    A common false positive: an L-shaped sofa has a large AABB that covers
+    its own open corner; a coffee table placed in that corner is fine
+    physically but looks like a world-space collision.
+
+    In pixel space: left/top are CENTER coords; length/width are axes before
+    rotation; orientation (CCW degrees) swaps the axes for 90°/270° items.
     """
     boxes = []
     for p in placements:
-        x  = p.scene["pos_x"]
-        y  = p.scene["pos_y"]
-        a  = _math.radians(p.scene.get("rotation_deg", 0.0))
+        cx  = p.px["left"]
+        cy  = p.px["top"]
+        a   = _math.radians(p.px.get("orientation", 0.0))
         ca, sa = abs(_math.cos(a)), abs(_math.sin(a))
-        hx = ca * p.scene["dim_x"] / 2 + sa * p.scene["dim_y"] / 2
-        hy = sa * p.scene["dim_x"] / 2 + ca * p.scene["dim_y"] / 2
-        boxes.append((p.category, x - hx, x + hx, y - hy, y + hy))
+        hx  = ca * p.px["length"] / 2 + sa * p.px["width"] / 2
+        hy  = sa * p.px["length"] / 2 + ca * p.px["width"] / 2
+        boxes.append((p.category, cx - hx, cx + hx, cy - hy, cy + hy))
 
     overlaps = []
     for i in range(len(boxes)):
         for j in range(i + 1, len(boxes)):
             cat_a, ax1, ax2, ay1, ay2 = boxes[i]
             cat_b, bx1, bx2, by1, by2 = boxes[j]
-            if (ax1 + margin < bx2 and ax2 - margin > bx1 and
-                    ay1 + margin < by2 and ay2 - margin > by1):
+            if (ax1 + margin_px < bx2 and ax2 - margin_px > bx1 and
+                    ay1 + margin_px < by2 and ay2 - margin_px > by1):
                 overlaps.append((cat_a, cat_b))
     return overlaps
 
@@ -321,9 +329,9 @@ class LayoutGPTRunner:
                 placements = self._parse_response(content, formatter)
                 results.append(placements)
 
-            # Check the first result for overlaps; retry if found.
+            # Check the first result for overlaps in pixel space; retry if found.
             if results:
-                bad_pairs = _overlapping_pairs(results[0])
+                bad_pairs = _overlapping_pairs_px(results[0])
                 if bad_pairs:
                     pair_str = ", ".join(f"{a}&{b}" for a, b in bad_pairs)
                     print(f"[LayoutGPTRunner] Overlap detected ({pair_str}) "
