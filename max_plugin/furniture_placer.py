@@ -43,6 +43,7 @@ from layoutgpt_bridge.layoutgpt_runner import (
     LayoutGPTRunner,
     load_dataset_stats,
     filter_stats_to_available,
+    load_train_examples,
 )
 from layoutgpt_bridge.placement_engine import PlacementEngine, PlacementResult
 from layoutgpt_bridge.tag_mapper       import layoutgpt_room_key
@@ -50,6 +51,9 @@ from layoutgpt_bridge.tag_mapper       import layoutgpt_room_key
 # ---------------------------------------------------------------------------
 # Backend → base_url map
 # ---------------------------------------------------------------------------
+# Default data directory: bundled alongside this file in max_plugin/data/
+_DEFAULT_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+
 BACKEND_URLS: dict[str, str | None] = {
     "ollama"  : "http://localhost:11434/v1",
     "openai"  : None,
@@ -61,48 +65,6 @@ BACKEND_DEFAULT_KEY: dict[str, str] = {
     "openai" : "",
     "custom" : "",
 }
-
-# ---------------------------------------------------------------------------
-# Few-shot examples (compact hard-coded; extend with real ATISS examples)
-# ---------------------------------------------------------------------------
-_BEDROOM_EXAMPLE = {
-    "condition": (
-        "Condition:\nRoom Type: bedroom\n"
-        "Room Size: max length 270px, max width 252px\n"
-    ),
-    "layout": (
-        "double_bed {length: 170px; width: 130px; height: 57px; "
-        "left: 129px; top: 111px; depth: 28px; orientation: 0 degrees;}\n"
-        "nightstand {length: 40px; width: 40px; height: 45px; "
-        "left: 60px; top: 111px; depth: 22px; orientation: 0 degrees;}\n"
-        "nightstand {length: 40px; width: 40px; height: 45px; "
-        "left: 216px; top: 111px; depth: 22px; orientation: 180 degrees;}\n"
-        "wardrobe {length: 80px; width: 40px; height: 120px; "
-        "left: 220px; top: 40px; depth: 60px; orientation: 90 degrees;}\n"
-    ),
-}
-_LIVINGROOM_EXAMPLE = {
-    "condition": (
-        "Condition:\nRoom Type: living room\n"
-        "Room Size: max length 320px, max width 280px\n"
-    ),
-    "layout": (
-        "multi_seat_sofa {length: 180px; width: 80px; height: 60px; "
-        "left: 120px; top: 180px; depth: 30px; orientation: 0 degrees;}\n"
-        "coffee_table {length: 90px; width: 50px; height: 35px; "
-        "left: 120px; top: 120px; depth: 17px; orientation: 0 degrees;}\n"
-        "armchair {length: 70px; width: 70px; height: 60px; "
-        "left: 40px; top: 160px; depth: 30px; orientation: 90 degrees;}\n"
-        "tv_stand {length: 130px; width: 45px; height: 40px; "
-        "left: 120px; top: 50px; depth: 20px; orientation: 0 degrees;}\n"
-    ),
-}
-
-_FEW_SHOT: dict[str, list[dict]] = {
-    "bedroom"    : [_BEDROOM_EXAMPLE],
-    "livingroom" : [_LIVINGROOM_EXAMPLE],
-}
-
 
 def _flat_frequencies(categories: list[str]) -> dict[str, float]:
     freq = 1.0 / max(len(categories), 1)
@@ -270,22 +232,26 @@ def main(config: dict[str, Any]) -> str:
         room_key = layoutgpt_room_key(room_entry.room_type)
         available_cats = list(library.keys())  # ordering applied by runner
 
-        # Optionally load frequency priors
-        if config.get("dataset_dir"):
-            if room_key not in stats_cache:
-                try:
-                    stats_cache[room_key] = load_dataset_stats(config["dataset_dir"], room_key)
-                except FileNotFoundError:
-                    stats_cache[room_key] = None
-            stats = stats_cache[room_key]
-            if stats:
-                available_cats, class_freq = filter_stats_to_available(stats, available_cats)
-            else:
-                class_freq = _flat_frequencies(available_cats)
+        # Resolve dataset directory: prefer explicit config, fall back to bundled data
+        data_dir = config.get("dataset_dir") or _DEFAULT_DATA_DIR
+
+        # Load frequency priors from dataset_stats.txt
+        if room_key not in stats_cache:
+            try:
+                stats_cache[room_key] = load_dataset_stats(data_dir, room_key)
+            except FileNotFoundError:
+                stats_cache[room_key] = None
+        stats = stats_cache[room_key]
+        if stats:
+            available_cats, class_freq = filter_stats_to_available(stats, available_cats)
         else:
             class_freq = _flat_frequencies(available_cats)
 
-        examples = _FEW_SHOT.get(room_key, [_BEDROOM_EXAMPLE])
+        # Load train examples for k-similar in-context example retrieval
+        train_examples = load_train_examples(data_dir, room_key)
+        if train_examples:
+            print(f"[FurniturePlacer] Loaded {len(train_examples)} train examples "
+                  f"for k-similar retrieval ({room_key})")
 
         # Measure actual asset footprints and pass to LLM so it can reason
         # about real sizes rather than guessing from category statistics.
@@ -312,10 +278,10 @@ def main(config: dict[str, Any]) -> str:
                 formatter            = formatter,
                 available_categories = available_cats,
                 class_frequencies    = class_freq,
-                few_shot_examples    = examples,
                 n_results            = 1,
                 asset_sizes          = asset_px_sizes,
                 category_counts      = category_counts,
+                train_examples       = train_examples,
             )
         except Exception as exc:
             all_results.append(f"ERROR {room_entry.node_name}: LLM call failed – {exc}")

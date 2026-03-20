@@ -1,0 +1,27 @@
+{
+  "object_types": [
+    "multi_seat_sofa", "coffee_table", "armchair", "ceiling_lamp",
+    "tv_stand", "floor_lamp", "bookcase", "cabinet", "side_table",
+    "pendant_lamp", "l_shaped_sofa", "loveseat", "console_table",
+    "desk", "chair", "shelf", "stool"
+  ],
+  "class_frequencies": {
+    "multi_seat_sofa": 0.70,
+    "coffee_table": 0.60,
+    "armchair": 0.45,
+    "ceiling_lamp": 0.40,
+    "tv_stand": 0.35,
+    "floor_lamp": 0.30,
+    "bookcase": 0.25,
+    "cabinet": 0.25,
+    "side_table": 0.25,
+    "pendant_lamp": 0.22,
+    "l_shaped_sofa": 0.12,
+    "loveseat": 0.15,
+    "console_table": 0.10,
+    "desk": 0.15,
+    "chair": 0.20,
+    "shelf": 0.18,
+    "stool": 0.12
+  }
+}

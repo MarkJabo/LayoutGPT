@@ -1,0 +1,31 @@
+{
+  "object_types": [
+    "double_bed", "nightstand", "wardrobe", "ceiling_lamp", "desk",
+    "chair", "cabinet", "chest_of_drawers", "floor_lamp", "shelf",
+    "armchair", "single_bed", "pendant_lamp", "stool", "tv_stand",
+    "vanity", "coffee_table", "bookcase", "sofa", "kids_bed", "bunk_bed"
+  ],
+  "class_frequencies": {
+    "double_bed": 0.60,
+    "nightstand": 0.55,
+    "wardrobe": 0.45,
+    "ceiling_lamp": 0.45,
+    "desk": 0.25,
+    "chair": 0.22,
+    "cabinet": 0.25,
+    "chest_of_drawers": 0.15,
+    "floor_lamp": 0.10,
+    "shelf": 0.14,
+    "armchair": 0.12,
+    "single_bed": 0.12,
+    "pendant_lamp": 0.12,
+    "stool": 0.10,
+    "tv_stand": 0.08,
+    "vanity": 0.08,
+    "coffee_table": 0.08,
+    "bookcase": 0.08,
+    "sofa": 0.08,
+    "kids_bed": 0.05,
+    "bunk_bed": 0.04
+  }
+}

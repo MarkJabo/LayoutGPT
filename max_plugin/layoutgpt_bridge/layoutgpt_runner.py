@@ -489,6 +489,7 @@ class LayoutGPTRunner:
         n_results: int = 1,
         asset_sizes: dict[str, dict[str, int]] | None = None,
         category_counts: dict[str, int] | None = None,
+        train_examples: dict[str, dict] | None = None,
     ) -> list[list[Placement]]:
         """
         Generate furniture placements for a room.
@@ -516,7 +517,17 @@ class LayoutGPTRunner:
             category_counts=category_counts,
         )
         if few_shot_examples is None:
-            few_shot_examples = _default_few_shot_examples(formatter.room.room_type)
+            if train_examples:
+                few_shot_examples = select_similar_examples(
+                    train_examples,
+                    formatter.room_px_length,
+                    formatter.room_px_width,
+                    k=4,
+                )
+                print(f"[LayoutGPTRunner] k-similar: selected {len(few_shot_examples)} "
+                      f"examples for {formatter.room_px_length}×{formatter.room_px_width}px room")
+            if not few_shot_examples:
+                few_shot_examples = _default_few_shot_examples(formatter.room.room_type)
 
         _MAX_OVERLAP_RETRIES = 2
         retry_hint = ""
@@ -668,3 +679,57 @@ def filter_stats_to_available(
         k: v for k, v in stats["class_frequencies"].items() if k in avail_set
     }
     return filtered_types, filtered_freq
+
+
+# ---------------------------------------------------------------------------
+# Train examples loader + k-similar selection
+# (mirrors get_closest_room / load_features in run_layoutgpt_3d.py)
+# ---------------------------------------------------------------------------
+
+def load_train_examples(data_dir: str, room_type: str) -> dict[str, dict]:
+    """
+    Load train_examples.json for k-similar in-context example retrieval.
+
+    data_dir should be the root data directory (e.g. max_plugin/data/).
+    Returns an empty dict if the file does not exist.
+    """
+    path = os.path.join(data_dir, room_type, "train_examples.json")
+    if not os.path.exists(path):
+        return {}
+    with open(path, "r") as fh:
+        return json.load(fh)
+
+
+def select_similar_examples(
+    examples: dict[str, dict],
+    target_length_px: int,
+    target_width_px: int,
+    k: int = 4,
+) -> list[dict]:
+    """
+    Dimension-based k-similar retrieval: L2 distance on [length_px, width_px].
+
+    Mirrors get_closest_room() in run_layoutgpt_3d.py which uses simple L2 on
+    room-layout 64×64 bitmaps; here we use the two scalar room dimensions as a
+    lightweight proxy since we don't have precomputed image features.
+
+    Returns up to k examples (fewer if the file has fewer entries) sorted by
+    ascending distance so the closest example comes first.
+    """
+    if not examples:
+        return []
+
+    scored: list[tuple[float, dict]] = []
+    for ex in examples.values():
+        cond = ex.get("condition", "")
+        m_len = re.search(r"max length (\d+)px", cond)
+        m_wid = re.search(r"max width (\d+)px", cond)
+        if not m_len or not m_wid:
+            continue
+        dl = int(m_len.group(1)) - target_length_px
+        dw = int(m_wid.group(1)) - target_width_px
+        dist = dl * dl + dw * dw
+        scored.append((dist, ex))
+
+    scored.sort(key=lambda x: x[0])
+    return [ex for _, ex in scored[:k]]
