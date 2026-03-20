@@ -268,7 +268,7 @@ def main(config: dict[str, Any]) -> str:
             continue
 
         room_key = layoutgpt_room_key(room_entry.room_type)
-        available_cats = sorted(library.keys())
+        available_cats = list(library.keys())  # ordering applied by runner
 
         # Optionally load frequency priors
         if config.get("dataset_dir"):

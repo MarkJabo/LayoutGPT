@@ -99,6 +99,44 @@ def _parse_3d_line(line: str, unit: str = "px") -> tuple[str, dict[str, float]] 
 
 
 # ---------------------------------------------------------------------------
+# Semantic category ordering
+# ---------------------------------------------------------------------------
+# Anchor items (bed, sofa) must appear first so the LLM places them before
+# deciding where accessories (chairs, lamps) go.  Unknown categories fall to
+# the end of the list.
+
+_BEDROOM_PRIORITY: list[str] = [
+    "double_bed", "single_bed", "kids_bed", "bunk_bed",
+    "nightstand", "bedside_table",
+    "wardrobe", "cabinet", "dresser", "chest_of_drawers",
+    "vanity", "desk",
+    "desk_chair", "chair",
+    "armchair", "lounge_chair",
+    "shelf", "bookcase",
+    "coffee_table", "side_table", "stool",
+    "ceiling_lamp", "floor_lamp", "pendant_lamp",
+]
+
+_LIVINGROOM_PRIORITY: list[str] = [
+    "multi_seat_sofa", "l_shaped_sofa", "sofa",
+    "armchair", "lounge_chair",
+    "coffee_table",
+    "tv_stand", "media_console", "console_table",
+    "side_table", "end_table",
+    "shelf", "bookcase", "cabinet",
+    "ceiling_lamp", "floor_lamp", "pendant_lamp",
+]
+
+
+def _sort_by_priority(categories: list[str], room_type: str) -> list[str]:
+    """Return categories sorted by semantic placement priority for room_type."""
+    norm = room_type.lower().replace(" ", "")
+    priority = _LIVINGROOM_PRIORITY if "living" in norm else _BEDROOM_PRIORITY
+    priority_map = {cat: i for i, cat in enumerate(priority)}
+    return sorted(categories, key=lambda c: priority_map.get(c, len(priority)))
+
+
+# ---------------------------------------------------------------------------
 # Overlap detection and resolution
 # ---------------------------------------------------------------------------
 
@@ -198,27 +236,36 @@ def _required_items_block(
     category_counts: dict[str, int] | None,
 ) -> str:
     """
-    Build the closing IMPORTANT instruction that explicitly lists every item
-    the LLM must output, including how many CSS lines to write for categories
-    with max_instances > 1.
+    Build the closing IMPORTANT instruction listing every category and how many
+    CSS lines to generate.  Single-copy items are required; multi-copy items
+    say 'up to N' so the LLM places as many as fit naturally — the placement
+    engine will pick from available copies, and the overlap post-processor
+    removes any that can't be spaced correctly.
     """
     counts = category_counts or {}
-    lines = []
-    total_lines = 0
+    required_lines = []
+    optional_lines = []
     for cat in available_furniture:
         n = counts.get(cat, 1)
-        total_lines += n
         if n == 1:
-            lines.append(f"  1 × {cat}")
+            required_lines.append(f"  1 × {cat}  (required — output exactly 1 line)")
         else:
-            lines.append(f"  {n} × {cat}  ← output {n} separate CSS lines at different positions")
-    item_list = "\n".join(lines)
+            optional_lines.append(
+                f"  up to {n} × {cat}  "
+                f"(output 2–{n} lines if space permits; at least 1)"
+            )
+    all_lines = required_lines + optional_lines
+    item_list = "\n".join(all_lines)
+    total_required = len(required_lines) + len(optional_lines)  # at least 1 per category
     return (
-        f"IMPORTANT: You MUST output exactly {total_lines} CSS lines in total:\n"
+        f"IMPORTANT: Output CSS lines for the following items:\n"
         f"{item_list}\n"
-        "Do NOT skip any item. Do NOT add items not listed above.\n"
-        "Multiple copies of the same category must be spread across the room "
-        "and must not overlap each other.\n"
+        "Required items (count = 1) MUST always appear.\n"
+        "For items with 'up to N' copies, place as many as fit "
+        "without crowding — prioritise good spacing over quantity.\n"
+        "Do NOT add items not listed above.\n"
+        "Multiple copies of the same category must be well-separated "
+        "from each other and clearly spaced from other furniture.\n"
     )
 
 
@@ -249,6 +296,33 @@ def _build_system_prompt(
         )
     else:
         size_block = ""
+
+    # Grouping relationships: mention these only when both categories exist.
+    grouping_hints: list[str] = []
+    avail_set = set(available_furniture)
+    desk_cats  = {"desk", "vanity"}
+    chair_cats = {"chair", "desk_chair", "armchair"}
+    table_cats = {"coffee_table", "side_table", "dining_table"}
+    sofa_cats  = {"multi_seat_sofa", "l_shaped_sofa", "sofa"}
+    if avail_set & desk_cats and avail_set & chair_cats:
+        grouping_hints.append(
+            "- Place a chair directly IN FRONT of the desk "
+            "(same left, top = desk_top + desk_width/2 + gap + chair_width/2, orientation=180°)."
+        )
+    if avail_set & table_cats and avail_set & sofa_cats:
+        grouping_hints.append(
+            "- Place the coffee_table in the open gap between the sofa and the opposite wall; "
+            "align its left with the sofa's left centre."
+        )
+    if avail_set & table_cats and avail_set & chair_cats:
+        grouping_hints.append(
+            "- When multiple chairs are present, arrange them around the table — "
+            "one on each accessible side, all facing the table centre."
+        )
+    grouping_block = (
+        "Furniture grouping rules:\n" + "\n".join(grouping_hints) + "\n"
+        if grouping_hints else ""
+    )
 
     # Per-category placement hints derived from category name keywords.
     hint_lines = []
@@ -323,6 +397,7 @@ def _build_system_prompt(
         f"Available furnitures: {', '.join(available_furniture)}\n"
         f"Overall furniture frequencies: ({freq_str})\n"
         f"\n{room_guide}\n"
+        f"{grouping_block}"
         f"{per_cat_block}\n"
         "General rules:\n"
         "- Use the FULL room — distribute items across different walls.\n"
@@ -502,10 +577,13 @@ class LayoutGPTRunner:
         -------
         list of length n_results; each element is a list[Placement] for one layout.
         """
-        print(f"[LayoutGPTRunner] Available categories: {available_categories}")
+        # Sort categories semantically so the LLM encounters anchor items
+        # (bed, sofa) before accessories (chairs, lamps, side-tables).
+        ordered_cats = _sort_by_priority(available_categories, formatter.room.room_type)
+        print(f"[LayoutGPTRunner] Available categories (ordered): {ordered_cats}")
         print(f"[LayoutGPTRunner] Category counts: {category_counts}")
         system_msg = _build_system_prompt(
-            available_categories, class_frequencies, asset_sizes,
+            ordered_cats, class_frequencies, asset_sizes,
             room_type=formatter.room.room_type,
             category_counts=category_counts,
         )
