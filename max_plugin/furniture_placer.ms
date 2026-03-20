@@ -513,6 +513,13 @@ rollout ro_Generate "4 · Generate" width:420
         local pyCode = (
             "import sys, os\n" +
             "sys.path.insert(0, '" + fp_PyPath() + "')\n" +
+            -- Clear cached modules so code changes on disk are picked up every run.
+            -- Without this, 3ds Max's Python interpreter reuses the first-import
+            -- snapshot for the entire session, ignoring any file edits.
+            "_stale = [k for k in list(sys.modules.keys())\n" +
+            "          if k == 'furniture_placer' or k.startswith('layoutgpt_bridge')\n" +
+            "          or k == 'installer']\n" +
+            "for _m in _stale: del sys.modules[_m]\n" +
             "import furniture_placer as fp\n" +
             "cfg = {\n" +
             "    'backend'         : '" + backend + "',\n" +

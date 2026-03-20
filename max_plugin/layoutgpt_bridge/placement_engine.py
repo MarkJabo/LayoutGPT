@@ -127,23 +127,32 @@ def _place_on_floor(node, room: RoomInfo, asset: "FurnitureAsset | None" = None)
     """
     Snap the node's base (min Z) to the room floor level, preserving XY.
 
-    Uses the prototype asset's pre-computed bounding box when available.
     pivot_to_bottom = prototype.pos.z - prototype.bbox.min_z
-    → distance from pivot to the bottom face.
+    → distance from pivot to the bottom face of the prototype.
     Then:  inst.pos.z = floor_z + pivot_to_bottom
     → instance's bottom face lands exactly on floor_z.
 
     NOTE: In PyMXS, `node.pos.z = value` mutates a temporary Point3 copy and
     does NOT move the node.  We must assign a new Point3 to `node.pos`.
     """
+    floor_z = float(room.bbox.min_z)
     try:
         if asset is not None:
-            pivot_to_bottom = float(asset.node.pos.z) - float(asset.bbox.min_z)
+            proto_z   = float(asset.node.pos.z)
+            bbox_minz = float(asset.bbox.min_z)
+            pivot_to_bottom = proto_z - bbox_minz
+            print(f"[FloorSnap]  asset={asset.name}  "
+                  f"proto_pos.z={proto_z:.1f}  bbox.min_z={bbox_minz:.1f}  "
+                  f"pivot_to_bottom={pivot_to_bottom:.1f}  floor_z={floor_z:.1f}  "
+                  f"→ new_z={floor_z + pivot_to_bottom:.1f}")
         else:
             pivot_to_bottom = float(node.pos.z) - float(node.min.z)
-        new_z = float(room.bbox.min_z) + pivot_to_bottom
-    except Exception:
-        new_z = float(room.bbox.min_z)
+            print(f"[FloorSnap]  (no asset ref) pivot_to_bottom={pivot_to_bottom:.1f}  "
+                  f"floor_z={floor_z:.1f}")
+        new_z = floor_z + pivot_to_bottom
+    except Exception as exc:
+        print(f"[FloorSnap]  ERROR computing pivot_to_bottom: {exc} – falling back to floor_z")
+        new_z = floor_z
     p = node.pos
     node.pos = rt.Point3(float(p.x), float(p.y), new_z)
 
@@ -220,6 +229,12 @@ class PlacementEngine:
         """
         if not _IN_MAX:
             raise RuntimeError("PlacementEngine.place_all() requires pymxs (3ds Max).")
+
+        b = room.bbox
+        print(f"[PlacementEngine] Room '{room.name}'  "
+              f"X:[{b.min_x:.0f},{b.max_x:.0f}]  "
+              f"Y:[{b.min_y:.0f},{b.max_y:.0f}]  "
+              f"Z:[{b.min_z:.0f},{b.max_z:.0f}]  (floor_z={b.min_z:.0f})")
 
         result = PlacementResult()
         placed_nodes = []
