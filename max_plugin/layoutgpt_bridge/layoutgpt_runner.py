@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import random as _random
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -151,6 +152,12 @@ def _build_system_prompt(
         "- Place small items (tables, lamps, chairs) away from walls, in the middle.\n"
         "- Do NOT place two items at the same (left, top) position.\n"
         "- depth should be 0 for all floor-standing furniture.\n"
+        "Orientation rules (furniture must FACE INTO the room, not into the wall):\n"
+        "- Item against top wall    (top ≈ 0):   orientation = 180 degrees\n"
+        "- Item against bottom wall (top ≈ max):  orientation = 0 degrees\n"
+        "- Item against left wall   (left ≈ 0):   orientation = 90 degrees\n"
+        "- Item against right wall  (left ≈ max): orientation = 270 degrees\n"
+        "- Items in the middle of the room may face any direction.\n"
         f"IMPORTANT: You MUST output exactly one line for EACH of the "
         f"{len(available_furniture)} available furniture categories listed above. "
         f"Do not skip any category.\n"
@@ -250,7 +257,10 @@ class LayoutGPTRunner:
         """
         print(f"[LayoutGPTRunner] Available categories: {available_categories}")
         system_msg = _build_system_prompt(available_categories, class_frequencies, asset_sizes)
-        user_msg   = formatter.condition_prompt + "Layout:\n"
+        # Add a random variation tag so each request is unique — prevents OpenAI
+        # from returning a cached/identical response on repeated calls.
+        variation  = _random.randint(10000, 99999)
+        user_msg   = formatter.condition_prompt + f"Variation: {variation}\nLayout:\n"
         print(f"[LayoutGPTRunner] User prompt:\n{user_msg}")
 
         messages: list[dict] = [{"role": "system", "content": system_msg}]
