@@ -140,6 +140,24 @@ def _sort_by_priority(categories: list[str], room_type: str) -> list[str]:
 # Overlap detection and resolution
 # ---------------------------------------------------------------------------
 
+def _clashes_with_kept(
+    candidate: "Placement",
+    kept: list["Placement"],
+    margin_px: float = 2.0,
+) -> bool:
+    """
+    Return True if *candidate*'s bounding box overlaps any item in *kept*.
+
+    Tests each kept item individually against the candidate so that
+    pre-existing overlaps among kept items cannot cause false rejections.
+    """
+    # Build a tiny 2-element list for each kept item and test only that pair.
+    for existing in kept:
+        if _overlapping_pairs_px([existing, candidate], margin_px):
+            return True
+    return False
+
+
 def _remove_overlapping_placements(
     placements: list["Placement"],
     margin_px: float = 2.0,
@@ -154,7 +172,7 @@ def _remove_overlapping_placements(
     """
     kept: list["Placement"] = []
     for p in placements:
-        if not _overlapping_pairs_px(kept + [p], margin_px):
+        if not _clashes_with_kept(p, kept, margin_px):
             kept.append(p)
         else:
             print(f"[LayoutGPTRunner] Post-process removed '{p.category}' "
@@ -280,8 +298,9 @@ def _build_system_prompt(
         f"{obj}: {round(class_freq.get(obj, 0.0), 4)}" for obj in available_furniture
     )
 
-    # If we have measured asset sizes, instruct the LLM to use them exactly so
-    # its spatial reasoning reflects the actual mesh footprints.
+    # Asset size block: tell the LLM the measured real dimensions so it doesn't
+    # invent them.  The original paper derived sizes from the 3D-FUTURE dataset;
+    # here we measure from the actual Max scene assets.
     if asset_sizes:
         size_lines = "\n".join(
             f"  {cat}: length={asset_sizes[cat]['length']}px, "
@@ -291,124 +310,33 @@ def _build_system_prompt(
             if cat in asset_sizes
         )
         size_block = (
-            f"\nActual asset sizes (YOU MUST use these exact values for "
-            f"length/width/height — do not invent your own):\n{size_lines}\n"
+            f"Asset sizes (use these exact values for length/width/height):\n"
+            f"{size_lines}\n\n"
         )
     else:
         size_block = ""
 
-    # Grouping relationships: mention these only when both categories exist.
-    grouping_hints: list[str] = []
-    avail_set = set(available_furniture)
-    desk_cats  = {"desk", "vanity"}
-    chair_cats = {"chair", "desk_chair", "armchair"}
-    table_cats = {"coffee_table", "side_table", "dining_table"}
-    sofa_cats  = {"multi_seat_sofa", "l_shaped_sofa", "sofa"}
-    if avail_set & desk_cats and avail_set & chair_cats:
-        grouping_hints.append(
-            "- Place a chair directly IN FRONT of the desk "
-            "(same left, top = desk_top + desk_width/2 + gap + chair_width/2, orientation=180°)."
-        )
-    if avail_set & table_cats and avail_set & sofa_cats:
-        grouping_hints.append(
-            "- Place the coffee_table in the open gap between the sofa and the opposite wall; "
-            "align its left with the sofa's left centre."
-        )
-    if avail_set & table_cats and avail_set & chair_cats:
-        grouping_hints.append(
-            "- When multiple chairs are present, arrange them around the table — "
-            "one on each accessible side, all facing the table centre."
-        )
-    grouping_block = (
-        "Furniture grouping rules:\n" + "\n".join(grouping_hints) + "\n"
-        if grouping_hints else ""
-    )
-
-    # Per-category placement hints derived from category name keywords.
-    hint_lines = []
-    for cat in available_furniture:
-        zone = _placement_zone(cat)
-        if zone == "wall":
-            hint_lines.append(
-                f"  {cat} → WALL item: place with its back against a wall. "
-                f"left = length/2  for left wall;  left = max_length−length/2  for right wall; "
-                f"top = width/2  for far wall;  top = max_width−width/2  for near wall."
-            )
-        elif zone == "sofa_wall":
-            hint_lines.append(
-                f"  {cat} → SEATING: place against a wall, facing into the room."
-            )
-        elif zone == "floor_center":
-            hint_lines.append(
-                f"  {cat} → FLOOR item: place in the open floor area, away from walls, "
-                f"typically in front of a sofa or in the centre of an activity zone."
-            )
-        elif zone == "beside_bed":
-            hint_lines.append(
-                f"  {cat} → BESIDE BED: place adjacent to the bed at the same top value, "
-                f"against the nearest wall."
-            )
-    per_cat_block = "Per-item placement guide:\n" + "\n".join(hint_lines) + "\n"
-
-    # Room-type specific high-level layout description.
-    norm = room_type.lower().replace(" ", "")
-    if "bedroom" in norm:
-        room_guide = (
-            "Bedroom layout (follow this order):\n"
-            "1. Place the bed against the FAR wall (top = bed_width/2), centred left–right.\n"
-            "2. Place nightstand(s) flush beside the bed on one or both sides "
-            "(same top value, left = nightstand_length/2 or left = max−nightstand_length/2).\n"
-            "3. Place wardrobe/dresser against a SIDE wall or the NEAR wall.\n"
-            "4. Place the desk against a SIDE wall (NOT in the centre — it is a WALL item).\n"
-            "5. Place the desk chair directly in front of the desk "
-            "(same left, top = desk_top − desk_width/2 − chair_width/2 − gap), "
-            "orientation = 180° so it faces the desk.\n"
-            "6. Fill remaining wall space with shelves or cabinets.\n"
-        )
-    else:
-        room_guide = (
-            "Living-room layout (follow this order):\n"
-            "1. Place the main sofa against the FAR wall (top = sofa_width/2).\n"
-            "2. Place any secondary sofa/armchair against a SIDE wall "
-            "(orientation=90° so its back is against the wall).\n"
-            "3. Place the coffee table in the open floor zone in FRONT of the sofa "
-            "(top = sofa_top + sofa_width/2 + gap + coffee_width/2).\n"
-            "4. Place tv_stand / console against the NEAR wall "
-            "(top = max_width − tv_width/2), facing the sofa.\n"
-            "5. Place shelves/bookcases against the remaining side walls.\n"
-        )
-
     return (
-        "You are a 3D indoor scene designer for commercial real estate visualisation.\n"
+        # --- Identical to the paper's ChatGPT system prompt (form_prompt_for_chatgpt) ---
+        "You are a 3D indoor scene designer.\n"
         "Instruction: synthesize the 3D layout of an indoor scene. "
         "The generated 3D layout should follow the CSS style, where each line starts "
         "with the furniture category and is followed by the 3D size, orientation and "
-        "absolute position.\n"
-        f"Formally, each line must follow the template:\n"
+        "absolute position. "
+        "Formally, each line should follow the template:\n"
         f"FURNITURE {{length: ?{_UNIT}; width: ?{_UNIT}; height: ?{_UNIT}; "
         f"left: ?{_UNIT}; top: ?{_UNIT}; depth: ?{_UNIT}; orientation: ? degrees;}}\n"
-        f"All values are in {_UNIT_NAME} but the orientation angle is in degrees.\n"
-        "COORDINATE SYSTEM: left and top are the CENTRE position of the item.\n"
-        "  To place an item flush against the LEFT wall:  left = length/2\n"
-        "  To place an item flush against the RIGHT wall: left = max_length − length/2\n"
-        "  To place an item flush against the FAR wall:   top  = width/2\n"
-        "  To place an item flush against the NEAR wall:  top  = max_width − width/2\n"
-        f"{size_block}\n"
+        f"All values are in {_UNIT_NAME} but the orientation angle is in degrees.\n\n"
+        # --- Minimal coordinate note (the paper's ICL examples taught this implicitly;
+        #     we spell it out once since we have fewer examples) ---
+        "Note: left and top are the CENTRE of the item's floor footprint. "
+        "depth = 0 for all floor-standing furniture.\n\n"
+        # --- Asset sizes (replaces the paper's dataset-statistics-derived sizes) ---
+        f"{size_block}"
+        # --- Category list and frequencies (verbatim from the paper) ---
         f"Available furnitures: {', '.join(available_furniture)}\n"
-        f"Overall furniture frequencies: ({freq_str})\n"
-        f"\n{room_guide}\n"
-        f"{grouping_block}"
-        f"{per_cat_block}\n"
-        "General rules:\n"
-        "- Use the FULL room — distribute items across different walls.\n"
-        "- Do NOT place two items at the same (left, top) position.\n"
-        "- depth = 0 for all floor-standing furniture.\n"
-        "- Items must NOT overlap; maintain at least a 5px gap between bounding boxes.\n"
-        "  Space multiple copies of the same category evenly along the wall.\n"
-        "Orientation: 0, 90, 180, or 270 degrees.\n"
-        "CRITICAL — orientation 90°/270° SWAPS length and width in the floor footprint:\n"
-        "  A length=93, width=28 item at orientation=90 occupies 28px left–right "
-        "and 93px top–bottom.  Recalculate wall margins after any rotation.\n"
+        f"Overall furniture frequencies: ({freq_str})\n\n"
+        # --- Required items (needed because we have no k-similar retrieval) ---
         + _required_items_block(available_furniture, category_counts)
     )
 
