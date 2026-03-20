@@ -263,8 +263,8 @@ class PlacementEngine:
                                    pl.scene["pos_y"],
                                    pl.scene["pos_z"])
 
-                    # Rotation
-                    _set_z_rotation(inst, pl.scene["rotation_deg"])
+                    # Rotation: LLM angle + per-asset import-direction correction
+                    _set_z_rotation(inst, pl.scene["rotation_deg"] + asset.rotation_offset)
 
                     # Optional scale-to-fit
                     if self.scale_to_fit:

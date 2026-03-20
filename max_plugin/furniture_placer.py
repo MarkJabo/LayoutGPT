@@ -160,6 +160,7 @@ def _furniture_asset_from_entry(fentry, FurnitureAsset_cls, BoundingBox_cls):
             name=fentry.node_name,
             layoutgpt_category=fentry.category,
             bbox=bbox,
+            rotation_offset=float(fentry.rotation_offset),
             node=node,
         )
     except Exception:

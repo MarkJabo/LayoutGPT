@@ -88,6 +88,7 @@ class FurnitureAsset:
     name: str                       # Max object name, e.g. "FURN_sofa_corner_01"
     layoutgpt_category: str         # 3D-FUTURE category, e.g. "l_shaped_sofa"
     bbox: BoundingBox               # asset bounding box (pivot at base centre)
+    rotation_offset: float = 0.0   # degrees added to LLM rotation; corrects asset import direction
     node: object = field(default=None, repr=False)  # pymxs node ref
 
 

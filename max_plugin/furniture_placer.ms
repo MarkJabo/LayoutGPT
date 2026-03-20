@@ -38,7 +38,7 @@ if gFP_Status == undefined    do gFP_Status    = "Ready."
 
 -- Simple structs  -------------------------------------------------------
 struct FP_Room (nodeName, roomType)
-struct FP_Furn (nodeName, category, roomAssign, maxCopies)
+struct FP_Furn (nodeName, category, roomAssign, maxCopies, baseRotOffset)
 
 -- All LayoutGPT categories for the category dropdown
 global gFP_AllCats
@@ -96,8 +96,9 @@ fn fp_RefreshFurnList lb = (
     local items = #()
     for f in gFP_Furniture do (
         local dupe = if f.maxCopies > 1 then ("  x" + f.maxCopies as string) else ""
+        local rot  = if f.baseRotOffset != 0 then ("  +" + f.baseRotOffset as string + "°") else ""
         local rm   = if f.roomAssign != "all" then ("  [" + f.roomAssign + "]") else ""
-        append items (f.category + dupe + "  —  " + f.nodeName + rm)
+        append items (f.category + dupe + rot + "  —  " + f.nodeName + rm)
     )
     lb.items = items
 )
@@ -121,7 +122,8 @@ fn fp_RegistryJSON = (
         local f = gFP_Furniture[i]
         local comma = if i < gFP_Furniture.count then "," else ""
         s += "{\"node_name\":\"" + f.nodeName + "\",\"category\":\"" + f.category + "\","
-        s += "\"room_assignment\":\"" + f.roomAssign + "\",\"max_instances\":" + (f.maxCopies as string) + "}" + comma
+        s += "\"room_assignment\":\"" + f.roomAssign + "\",\"max_instances\":" + (f.maxCopies as string) + ","
+        s += "\"rotation_offset\":" + (f.baseRotOffset as string) + "}" + comma
     )
     s += "]}"
     s
@@ -344,6 +346,11 @@ rollout ro_Furniture "3 · Furniture Assets" width:420
         label           lbl_copies      "Max copies placed:" align:#left
         spinner         spn_copies      "" range:[1,20,1] type:#integer fieldWidth:50 align:#left
         label           lbl_copiesHint  "(1 = no duplicates)" align:#left
+
+        label           lbl_rotOffset   "Base rotation offset (°):" align:#left
+        spinner         spn_rotOffset   "" range:[-360,360,0] type:#integer fieldWidth:60 align:#left
+        label           lbl_rotHint     "(0 / 90 / 180 / 270 — fix asset import direction)" align:#left
+
         button          btn_applyItem   "Apply Changes" width:140 align:#left
     )
 
@@ -368,7 +375,8 @@ rollout ro_Furniture "3 · Furniture Assets" width:420
         for i = 1 to roomItems.count where roomItems[i] == f.roomAssign do rIdx = i
         ddl_room.selection = rIdx
 
-        spn_copies.value = f.maxCopies
+        spn_copies.value    = f.maxCopies
+        spn_rotOffset.value = f.baseRotOffset
     )
 
     on ro_Furniture open do (
@@ -392,7 +400,7 @@ rollout ro_Furniture "3 · Furniture Assets" width:420
                     "print(cat)\n"
                 )
                 local cat = fp_PyRun catCode default:"armchair"
-                append gFP_Furniture (FP_Furn nodeName:nm category:cat roomAssign:"all" maxCopies:1)
+                append gFP_Furniture (FP_Furn nodeName:nm category:cat roomAssign:"all" maxCopies:1 baseRotOffset:0)
                 added += 1
             )
         )
@@ -428,11 +436,12 @@ rollout ro_Furniture "3 · Furniture Assets" width:420
     on btn_applyItem pressed do (
         local sel = lb_furn.selection
         if sel > 0 and sel <= gFP_Furniture.count do (
-            gFP_Furniture[sel].category  = gFP_AllCats[ddl_cat.selection]
+            gFP_Furniture[sel].category     = gFP_AllCats[ddl_cat.selection]
             local roomItems = fp_RoomNames()
             local rSel      = ddl_room.selection
-            gFP_Furniture[sel].roomAssign = if rSel == 1 then "all" else roomItems[rSel]
-            gFP_Furniture[sel].maxCopies  = spn_copies.value as integer
+            gFP_Furniture[sel].roomAssign   = if rSel == 1 then "all" else roomItems[rSel]
+            gFP_Furniture[sel].maxCopies    = spn_copies.value as integer
+            gFP_Furniture[sel].baseRotOffset = spn_rotOffset.value as integer
             fp_RefreshFurnList lb_furn
         )
     )

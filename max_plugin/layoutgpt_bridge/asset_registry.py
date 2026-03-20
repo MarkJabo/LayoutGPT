@@ -46,13 +46,15 @@ class FurnitureEntry:
     category: str               # LayoutGPT 3D-FUTURE category
     room_assignment: str        # "all"  or  a RoomEntry.node_name
     max_instances: int          # how many copies LayoutGPT may place (1 = no duplicates)
+    rotation_offset: int = 0    # degrees added to LLM rotation; corrects asset import direction
     node: object = field(default=None, repr=False)   # pymxs node ref (runtime only)
 
     @property
     def display_label(self) -> str:
         dupe_tag = f"  ×{self.max_instances}" if self.max_instances > 1 else ""
         room_tag = f"  [{self.room_assignment}]" if self.room_assignment != "all" else ""
-        return f"{self.category}{dupe_tag}  —  {self.node_name}{room_tag}"
+        rot_tag  = f"  +{self.rotation_offset}°" if self.rotation_offset else ""
+        return f"{self.category}{dupe_tag}{rot_tag}  —  {self.node_name}{room_tag}"
 
 
 # ---------------------------------------------------------------------------
@@ -119,6 +121,7 @@ class AssetRegistry:
         category: str | None = None,
         room_assignment: str = "all",
         max_instances: int = 1,
+        rotation_offset: int = 0,
         node=None,
     ) -> FurnitureEntry:
         """
@@ -137,6 +140,7 @@ class AssetRegistry:
                 existing.category        = resolved_cat
                 existing.room_assignment = room_assignment
                 existing.max_instances   = max_instances
+                existing.rotation_offset = rotation_offset
                 existing.node            = node
                 return existing
 
@@ -145,6 +149,7 @@ class AssetRegistry:
             category        = resolved_cat,
             room_assignment = room_assignment,
             max_instances   = max_instances,
+            rotation_offset = rotation_offset,
             node            = node,
         )
         self.furniture.append(entry)
@@ -159,6 +164,7 @@ class AssetRegistry:
         category: str | None = None,
         room_assignment: str | None = None,
         max_instances: int | None = None,
+        rotation_offset: int | None = None,
     ) -> bool:
         """Update fields on an existing furniture entry. Returns True if found."""
         for entry in self.furniture:
@@ -169,6 +175,8 @@ class AssetRegistry:
                     entry.room_assignment = room_assignment
                 if max_instances is not None:
                     entry.max_instances = max_instances
+                if rotation_offset is not None:
+                    entry.rotation_offset = rotation_offset
                 return True
         return False
 
@@ -217,6 +225,7 @@ class AssetRegistry:
                     "category"        : f.category,
                     "room_assignment" : f.room_assignment,
                     "max_instances"   : f.max_instances,
+                    "rotation_offset" : f.rotation_offset,
                 }
                 for f in self.furniture
             ],
@@ -237,5 +246,6 @@ class AssetRegistry:
                 category        = f["category"],
                 room_assignment = f.get("room_assignment", "all"),
                 max_instances   = f.get("max_instances", 1),
+                rotation_offset = f.get("rotation_offset", 0),
             ))
         return registry
