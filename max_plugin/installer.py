@@ -153,16 +153,53 @@ def list_local_models() -> list[str]:
         return []
 
 
+def _pull_via_api(model_tag: str, progress_callback=None) -> "tuple[bool, str]":
+    """Pull a model via the Ollama HTTP API when the binary is not on PATH."""
+    import json
+    data = json.dumps({"name": model_tag}).encode()
+    req = urllib.request.Request(
+        "http://localhost:11434/api/pull", data=data,
+        headers={"Content-Type": "application/json"}, method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=600) as resp:
+            for raw in resp:
+                line = raw.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                    status = obj.get("status", "")
+                    if progress_callback and status:
+                        progress_callback(0, status[:80])
+                except Exception:
+                    pass
+        return True, f"Model '{model_tag}' is ready."
+    except Exception as exc:
+        return False, f"Pull via API failed: {exc}"
+
+
 def pull_model(model_tag: str, progress_callback=None) -> tuple[bool, str]:
     """
     Pull an Ollama model.  This blocks until the download completes.
+
+    Tries the CLI binary first; if the binary is not found at standard locations
+    but the Ollama server is already running (e.g. standalone .exe started by the
+    user), falls back to the Ollama HTTP API which requires no binary on PATH.
 
     progress_callback(pct: int, status: str) – optional; called periodically.
     Returns (success, message).
     """
     exe = _find_ollama_exe()
     if not exe:
-        return False, "Ollama binary not found."
+        if _ollama_reachable():
+            # Server is running even though binary isn't at a known location.
+            # Pull via the REST API — works for standalone / portable installs.
+            return _pull_via_api(model_tag, progress_callback)
+        return False, (
+            "Ollama not found at standard install locations and the server is not running. "
+            "Start Ollama first (double-click the .exe), then click Download Model again."
+        )
     try:
         proc = subprocess.Popen(
             [exe, "pull", model_tag],

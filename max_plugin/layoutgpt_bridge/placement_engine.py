@@ -123,21 +123,30 @@ def _scale_to_fit(node, asset: FurnitureAsset, target: dict[str, float]) -> None
     node.scale = _max_point3(sx, sy, sz)
 
 
-def _place_on_floor(node, room: RoomInfo) -> None:
+def _place_on_floor(node, room: RoomInfo, asset: "FurnitureAsset | None" = None) -> None:
     """
     Snap the node's base (min Z) to the room floor level, preserving XY.
-    This corrects any Z offset from LayoutGPT's 'depth' coordinate.
+
+    Uses the prototype asset's pre-computed bounding box when available.
+    Reading `node.min.z` on a freshly instanced object returns a stale cached
+    value from the prototype's original position — 3ds Max defers bbox
+    invalidation. Using the prototype's bbox (computed at load time) is reliable
+    regardless of where either the prototype or instance currently sit.
+
+    pivot_to_bottom = prototype.pos.z - prototype.bbox.min_z
+    → distance from pivot to the bottom face in any world position.
+    Then:  inst.pos.z = floor_z + pivot_to_bottom
+    → instance's bottom face lands exactly on floor_z.
     """
     try:
-        # node.min is a pymxs Point3 giving the world-space bounding box minimum.
-        # This is simpler and more reliable than nodeGetBoundingBox (which expects
-        # a node reference as its coordinate-system argument, not a matrix).
-        bbox_min_z = float(node.min.z)
+        if asset is not None:
+            pivot_to_bottom = float(asset.node.pos.z) - float(asset.bbox.min_z)
+        else:
+            # No prototype info — try reading instance bbox directly
+            pivot_to_bottom = float(node.pos.z) - float(node.min.z)
+        node.pos.z = float(room.bbox.min_z) + pivot_to_bottom
     except Exception:
-        # Fallback: treat current pivot as bbox base
-        bbox_min_z = float(node.pos.z)
-    current_z  = float(node.pos.z)
-    node.pos.z = current_z + (room.bbox.min_z - bbox_min_z)
+        node.pos.z = float(room.bbox.min_z)  # fallback: put pivot at floor level
 
 
 # ---------------------------------------------------------------------------
@@ -247,9 +256,9 @@ class PlacementEngine:
                     if self.scale_to_fit:
                         _scale_to_fit(inst, asset, pl.scene)
 
-                    # Snap base to floor
+                    # Snap base to floor using prototype's stable pre-computed bbox
                     if self.snap_to_floor:
-                        _place_on_floor(inst, room)
+                        _place_on_floor(inst, room, asset=asset)
 
                 placed_nodes.append(inst)
                 result.placed.append(inst_name)
