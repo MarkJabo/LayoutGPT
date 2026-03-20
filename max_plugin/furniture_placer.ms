@@ -40,6 +40,23 @@ if gFP_Status == undefined    do gFP_Status    = "Ready."
 struct FP_Room (nodeName, roomType)
 struct FP_Furn (nodeName, category, roomAssign, maxCopies, baseRotOffset)
 
+-- Migrate any legacy FP_Furn instances that pre-date the baseRotOffset field.
+-- MAXScript globals survive script re-runs within a Max session, so old struct
+-- instances created before this field was added will throw "Unknown property".
+-- We replace them with fresh instances that include baseRotOffset:0.
+fn fp_MigrateFurniture = (
+    local updated = #()
+    for f in gFP_Furniture do (
+        local rot = 0
+        try ( rot = f.baseRotOffset ) catch ()
+        append updated (FP_Furn nodeName:f.nodeName category:f.category \
+                                roomAssign:f.roomAssign maxCopies:f.maxCopies \
+                                baseRotOffset:rot)
+    )
+    gFP_Furniture = updated
+)
+fp_MigrateFurniture()
+
 -- All LayoutGPT categories for the category dropdown
 global gFP_AllCats
 gFP_AllCats = #(
