@@ -277,6 +277,18 @@ def main(config: dict[str, Any]) -> str:
 
         examples = _FEW_SHOT.get(room_key, [_BEDROOM_EXAMPLE])
 
+        # Measure actual asset footprints and pass to LLM so it can reason
+        # about real sizes rather than guessing from category statistics.
+        asset_px_sizes: dict[str, dict[str, int]] = {}
+        for cat, assets in library.items():
+            a = assets[0]  # use first asset as representative
+            asset_px_sizes[cat] = {
+                "length": max(1, int(round(a.bbox.length_x * formatter._scale))),
+                "width":  max(1, int(round(a.bbox.length_y * formatter._scale))),
+                "height": max(1, int(round(a.bbox.length_z * formatter._scale))),
+            }
+        print(f"[FurniturePlacer] Asset px sizes: {asset_px_sizes}")
+
         print(f"\n[FurniturePlacer] Generating layout for '{room_entry.node_name}' …")
         print(f"  {formatter.condition_prompt.strip()}")
 
@@ -287,6 +299,7 @@ def main(config: dict[str, Any]) -> str:
                 class_frequencies    = class_freq,
                 few_shot_examples    = examples,
                 n_results            = 1,
+                asset_sizes          = asset_px_sizes,
             )
         except Exception as exc:
             all_results.append(f"ERROR {room_entry.node_name}: LLM call failed – {exc}")

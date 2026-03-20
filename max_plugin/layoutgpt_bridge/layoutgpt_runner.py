@@ -86,10 +86,32 @@ _UNIT = "px"
 _UNIT_NAME = "pixels"
 
 
-def _build_system_prompt(available_furniture: list[str], class_freq: dict[str, float]) -> str:
+def _build_system_prompt(
+    available_furniture: list[str],
+    class_freq: dict[str, float],
+    asset_sizes: dict[str, dict[str, int]] | None = None,
+) -> str:
     freq_str = "; ".join(
         f"{obj}: {round(class_freq.get(obj, 0.0), 4)}" for obj in available_furniture
     )
+
+    # If we have measured asset sizes, instruct the LLM to use them exactly so
+    # its spatial reasoning reflects the actual mesh footprints.
+    if asset_sizes:
+        size_lines = "\n".join(
+            f"  {cat}: length={asset_sizes[cat]['length']}px, "
+            f"width={asset_sizes[cat]['width']}px, "
+            f"height={asset_sizes[cat]['height']}px"
+            for cat in available_furniture
+            if cat in asset_sizes
+        )
+        size_block = (
+            f"\nActual asset sizes (YOU MUST use these exact values for "
+            f"length/width/height — do not invent your own):\n{size_lines}\n"
+        )
+    else:
+        size_block = ""
+
     return (
         "You are a 3D indoor scene designer for commercial real estate visualisation.\n"
         "Instruction: synthesize the 3D layout of an indoor scene. "
@@ -99,7 +121,8 @@ def _build_system_prompt(available_furniture: list[str], class_freq: dict[str, f
         f"Formally, each line must follow the template:\n"
         f"FURNITURE {{length: ?{_UNIT}; width: ?{_UNIT}; height: ?{_UNIT}; "
         f"left: ?{_UNIT}; top: ?{_UNIT}; depth: ?{_UNIT}; orientation: ? degrees;}}\n"
-        f"All values are in {_UNIT_NAME} but the orientation angle is in degrees.\n\n"
+        f"All values are in {_UNIT_NAME} but the orientation angle is in degrees.\n"
+        f"{size_block}\n"
         f"Available furnitures: {', '.join(available_furniture)}\n"
         f"Overall furniture frequencies: ({freq_str})\n"
         f"IMPORTANT: You MUST output exactly one line for EACH of the "
@@ -182,6 +205,7 @@ class LayoutGPTRunner:
         class_frequencies: dict[str, float],
         few_shot_examples: list[dict] | None = None,
         n_results: int = 1,
+        asset_sizes: dict[str, dict[str, int]] | None = None,
     ) -> list[list[Placement]]:
         """
         Generate furniture placements for a room.
@@ -199,7 +223,7 @@ class LayoutGPTRunner:
         list of length n_results; each element is a list[Placement] for one layout.
         """
         print(f"[LayoutGPTRunner] Available categories: {available_categories}")
-        system_msg = _build_system_prompt(available_categories, class_frequencies)
+        system_msg = _build_system_prompt(available_categories, class_frequencies, asset_sizes)
         user_msg   = formatter.condition_prompt + "Layout:\n"
         print(f"[LayoutGPTRunner] User prompt:\n{user_msg}")
 

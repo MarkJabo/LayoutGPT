@@ -147,11 +147,14 @@ class RoomFormatter:
         """
         s = self._inv_scale  # px → scene units
 
-        # LayoutGPT "left" = X, "top" = Y (depth), "depth" = Z (height off floor).
-        # Clamp to room bounds: LLMs occasionally overshoot the canvas for
-        # non-square rooms, which would otherwise discard every placement.
+        # LayoutGPT image coordinate system: left=X (increases right), top=Y
+        # but top=0 is the TOP of the image (far wall) and increases DOWNWARD.
+        # 3ds Max world Y increases UPWARD, so top must be inverted:
+        #   top=0  →  max_y (far wall)
+        #   top=px →  max_y - px*scale  (toward near wall)
+        # Clamp after inversion so LLM overshoots land at the wall, not outside.
         pos_x = self._origin_x + float(placement["left"]) * s
-        pos_y = self._origin_y + float(placement["top"])  * s
+        pos_y = self.room.bbox.max_y - float(placement["top"]) * s
         pos_z = self._floor_z  + float(placement.get("depth", 0.0)) * s
 
         pos_x = max(self.room.bbox.min_x, min(self.room.bbox.max_x, pos_x))
@@ -161,9 +164,9 @@ class RoomFormatter:
         dim_y = float(placement["width"])  * s
         dim_z = float(placement["height"]) * s
 
-        # LayoutGPT orientation is CCW in degrees; 3ds Max Z-rotation is also
-        # CCW when viewed from above in a right-hand system, so no sign flip.
-        rotation_deg = float(placement.get("orientation", 0.0))
+        # Flipping Y changes chirality: CCW in image space → CW in world space.
+        # Negate orientation so a sofa "facing down in image" faces -Y in Max.
+        rotation_deg = -float(placement.get("orientation", 0.0))
 
         return {
             "pos_x"        : pos_x,
@@ -185,12 +188,12 @@ class RoomFormatter:
         s = self._scale  # scene_unit → px
         return {
             "left"       : (pos_x - self._origin_x) * s,
-            "top"        : (pos_y - self._origin_y) * s,
+            "top"        : (self.room.bbox.max_y - pos_y) * s,   # Y inverted
             "depth"      : (pos_z - self._floor_z)  * s,
             "length"     : dim_x * s,
             "width"      : dim_y * s,
             "height"     : dim_z * s,
-            "orientation": rotation_deg,
+            "orientation": -rotation_deg,                         # negate back
         }
 
     # ------------------------------------------------------------------
