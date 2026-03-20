@@ -129,8 +129,10 @@ def _place_on_floor(node, room: RoomInfo) -> None:
     This corrects any Z offset from LayoutGPT's 'depth' coordinate.
     """
     try:
-        # rt.matrix3(1) is the identity matrix in pymxs (lowercase required)
-        bbox_min_z = float(rt.nodeGetBoundingBox(node, rt.matrix3(1))[0].z)
+        # node.min is a pymxs Point3 giving the world-space bounding box minimum.
+        # This is simpler and more reliable than nodeGetBoundingBox (which expects
+        # a node reference as its coordinate-system argument, not a matrix).
+        bbox_min_z = float(node.min.z)
     except Exception:
         # Fallback: treat current pivot as bbox base
         bbox_min_z = float(node.pos.z)

@@ -207,10 +207,13 @@ rollout ro_Setup "1 · LLM Setup" width:420
         prg_pull.value = 5
         windows.processPostedMessages()
         local code = "import sys; sys.path.insert(0,'" + fp_PyPath() + "')\n" + \
-                     "from installer import pull_model\n" + \
-                     "ok,msg = pull_model('" + tag + "')\n" + \
-                     "print(msg)\n"
-        local msg = fp_PyRun code default:"(no response)"
+                     "try:\n" + \
+                     "    from installer import pull_model\n" + \
+                     "    ok,msg = pull_model('" + tag + "')\n" + \
+                     "    print(msg)\n" + \
+                     "except Exception as _e:\n" + \
+                     "    print('Error: ' + str(_e))\n"
+        local msg = fp_PyRun code default:"(no response – check Ollama is installed)"
         prg_pull.value = 100
         -- Append where Ollama stores models so the user can verify
         local ollamaModelsPath = (dotNetClass "System.Environment").GetEnvironmentVariable "USERPROFILE"

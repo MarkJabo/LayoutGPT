@@ -152,7 +152,7 @@ class LayoutGPTRunner:
         base_url: str | None = None,
         temperature: float = 0.7,
         max_tokens: int = 1024,
-        max_retries: int = 4,
+        max_retries: int = 1,
     ):
         self.model = model
         self.temperature = temperature
@@ -166,7 +166,7 @@ class LayoutGPTRunner:
                 "for OpenAI pass your sk- key or set OPENAI_API_KEY."
             )
 
-        client_kwargs: dict[str, Any] = {"api_key": resolved_key}
+        client_kwargs: dict[str, Any] = {"api_key": resolved_key, "timeout": 30.0}
         if base_url:
             client_kwargs["base_url"] = base_url
 
@@ -239,19 +239,20 @@ class LayoutGPTRunner:
                 )
                 return [choice.message.content for choice in resp.choices]
             except openai.RateLimitError as exc:
+                # Rate limit – worth retrying after a short wait
                 last_exc = exc
                 print(f"[LayoutGPTRunner] RateLimitError – retry in {delay:.0f}s")
             except openai.APIStatusError as exc:
-                last_exc = exc
-                print(f"[LayoutGPTRunner] APIStatusError {exc.status_code} – retry in {delay:.0f}s")
+                # Auth / model / server error – retrying won't help, fail immediately
+                raise RuntimeError(f"API error {exc.status_code}: {exc.message}") from exc
             except openai.APIConnectionError as exc:
-                last_exc = exc
-                print(f"[LayoutGPTRunner] Connection error – retry in {delay:.0f}s")
+                # Network / endpoint unreachable – fail immediately so Max doesn't freeze
+                raise RuntimeError(f"Cannot reach API: {exc}") from exc
 
             time.sleep(delay)
             delay *= 2  # exponential back-off
 
-        raise RuntimeError(f"OpenAI API failed after {self.max_retries} retries: {last_exc}")
+        raise RuntimeError(f"API still rate-limited after {self.max_retries} retries: {last_exc}")
 
     # ------------------------------------------------------------------
     # Response parser
