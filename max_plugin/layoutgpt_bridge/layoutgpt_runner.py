@@ -102,6 +102,9 @@ def _build_system_prompt(available_furniture: list[str], class_freq: dict[str, f
         f"All values are in {_UNIT_NAME} but the orientation angle is in degrees.\n\n"
         f"Available furnitures: {', '.join(available_furniture)}\n"
         f"Overall furniture frequencies: ({freq_str})\n"
+        f"IMPORTANT: You MUST output exactly one line for EACH of the "
+        f"{len(available_furniture)} available furniture categories listed above. "
+        f"Do not skip any category.\n"
     )
 
 
@@ -195,8 +198,10 @@ class LayoutGPTRunner:
         -------
         list of length n_results; each element is a list[Placement] for one layout.
         """
+        print(f"[LayoutGPTRunner] Available categories: {available_categories}")
         system_msg = _build_system_prompt(available_categories, class_frequencies)
         user_msg   = formatter.condition_prompt + "Layout:\n"
+        print(f"[LayoutGPTRunner] User prompt:\n{user_msg}")
 
         messages: list[dict] = [{"role": "system", "content": system_msg}]
         if few_shot_examples:
@@ -243,6 +248,7 @@ class LayoutGPTRunner:
     # ------------------------------------------------------------------
 
     def _parse_response(self, content: str, formatter: RoomFormatter) -> list[Placement]:
+        print(f"[LayoutGPTRunner] Raw LLM response:\n{content}")
         placements: list[Placement] = []
         for line in content.splitlines():
             line = line.strip()
