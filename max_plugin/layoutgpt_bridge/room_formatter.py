@@ -157,8 +157,21 @@ class RoomFormatter:
         pos_y = self.room.bbox.max_y - float(placement["top"]) * s
         pos_z = self._floor_z  + float(placement.get("depth", 0.0)) * s
 
-        pos_x = max(self.room.bbox.min_x, min(self.room.bbox.max_x, pos_x))
-        pos_y = max(self.room.bbox.min_y, min(self.room.bbox.max_y, pos_y))
+        # Clamp centre so the furniture *body* stays inside the room.
+        # Shift the allowed range inward by half the object's footprint so
+        # no piece clips through a wall (guard against degenerate oversized assets).
+        wall_min_x = self.room.bbox.min_x + dim_x / 2
+        wall_max_x = self.room.bbox.max_x - dim_x / 2
+        wall_min_y = self.room.bbox.min_y + dim_y / 2
+        wall_max_y = self.room.bbox.max_y - dim_y / 2
+        if wall_min_x < wall_max_x:
+            pos_x = max(wall_min_x, min(wall_max_x, pos_x))
+        else:  # asset is wider than the room – fall back to centring
+            pos_x = (self.room.bbox.min_x + self.room.bbox.max_x) / 2
+        if wall_min_y < wall_max_y:
+            pos_y = max(wall_min_y, min(wall_max_y, pos_y))
+        else:
+            pos_y = (self.room.bbox.min_y + self.room.bbox.max_y) / 2
 
         dim_x = float(placement["length"]) * s
         dim_y = float(placement["width"])  * s

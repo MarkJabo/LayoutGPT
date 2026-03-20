@@ -51,29 +51,47 @@ def _parse_3d_line(line: str, unit: str = "px") -> tuple[str, dict[str, float]] 
     Expected format:
         double_bed {length: 170px; width: 130px; height: 57px;
                     left: 129px; top: 111px; depth: 28px; orientation: 0 degrees;}
+
+    Lenient: fields may be in any order; missing optional fields (depth,
+    orientation) are defaulted rather than causing the whole line to be dropped.
+    Required: category name, braces, and at minimum left/top/length/width.
     """
+    # Must contain braces
+    if "{" not in line:
+        return None, None
     try:
         text, rest = line.split("{", 1)
-        rest = rest.strip().rstrip("}").strip().rstrip(";")
-        parts = [p.strip() for p in rest.split(";") if p.strip()]
-        assert len(parts) == 7
-    except (ValueError, AssertionError):
+    except ValueError:
         return None, None
 
+    rest = rest.strip().rstrip("}").strip().rstrip(";")
+    parts = [p.strip() for p in rest.split(";") if p.strip()]
+
     category = re.sub(r"\d", "", text.strip()).strip()
+    if not category:
+        return None, None
+
     parsed: dict[str, float] = {}
     for part in parts:
         try:
             key, val = part.split(":", 1)
             key = key.strip()
-            val = val.strip().rstrip(unit).rstrip("degrees").strip()
+            # Strip unit suffix and any trailing whitespace
+            val = val.strip()
+            val = re.sub(r"(px|degrees?)\s*$", "", val, flags=re.IGNORECASE).strip()
             parsed[key] = float(val)
-        except ValueError:
-            return None, None
+        except (ValueError, AttributeError):
+            continue  # skip malformed fields rather than dropping the whole line
 
-    required = {"length", "width", "height", "left", "top", "depth", "orientation"}
-    if set(parsed.keys()) != required:
+    # Require the four spatial fields that can't be defaulted
+    required_min = {"length", "width", "left", "top"}
+    if not required_min.issubset(parsed.keys()):
         return None, None
+
+    # Default optional fields so downstream code always sees all seven keys
+    parsed.setdefault("height", 60.0)
+    parsed.setdefault("depth", 0.0)
+    parsed.setdefault("orientation", 0.0)
 
     return category, parsed
 
@@ -125,6 +143,14 @@ def _build_system_prompt(
         f"{size_block}\n"
         f"Available furnitures: {', '.join(available_furniture)}\n"
         f"Overall furniture frequencies: ({freq_str})\n"
+        "Placement rules:\n"
+        "- Spread furniture across the ENTIRE room area — use the full range of left "
+        "and top values, not just the centre.\n"
+        "- Place large items (sofas, beds, wardrobes) against walls "
+        "(left ≈ 0, left ≈ max, top ≈ 0, or top ≈ max).\n"
+        "- Place small items (tables, lamps, chairs) away from walls, in the middle.\n"
+        "- Do NOT place two items at the same (left, top) position.\n"
+        "- depth should be 0 for all floor-standing furniture.\n"
         f"IMPORTANT: You MUST output exactly one line for EACH of the "
         f"{len(available_furniture)} available furniture categories listed above. "
         f"Do not skip any category.\n"
