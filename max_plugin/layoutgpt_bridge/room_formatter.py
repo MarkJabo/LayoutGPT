@@ -223,9 +223,24 @@ class RoomFormatter:
     # ------------------------------------------------------------------
 
     def placement_in_bounds(self, scene_placement: dict[str, float]) -> bool:
-        """Return True if the furniture centre lies inside the room bbox."""
-        px, py = scene_placement["pos_x"], scene_placement["pos_y"]
+        """
+        Return True if the furniture's full rotated footprint lies inside the
+        room bbox.
+
+        Uses the same rotated-AABB half-extent formula as from_px so that any
+        item which passed wall-clamping will always return True here.  Items
+        whose pixel dimensions mapped outside the room (e.g. very large assets
+        in a tiny room) will correctly return False and be dropped.
+        """
+        px, py  = scene_placement["pos_x"], scene_placement["pos_y"]
+        rot_rad = math.radians(abs(float(scene_placement.get("rotation_deg", 0.0))))
+        cos_a   = abs(math.cos(rot_rad))
+        sin_a   = abs(math.sin(rot_rad))
+        dim_x   = float(scene_placement.get("dim_x", 0.0))
+        dim_y   = float(scene_placement.get("dim_y", 0.0))
+        hx = cos_a * (dim_x / 2) + sin_a * (dim_y / 2)
+        hy = sin_a * (dim_x / 2) + cos_a * (dim_y / 2)
         return (
-            self.room.bbox.min_x <= px <= self.room.bbox.max_x and
-            self.room.bbox.min_y <= py <= self.room.bbox.max_y
+            self.room.bbox.min_x <= px - hx and px + hx <= self.room.bbox.max_x and
+            self.room.bbox.min_y <= py - hy and py + hy <= self.room.bbox.max_y
         )

@@ -146,11 +146,36 @@ def _overlapping_pairs_px(
 _UNIT = "px"
 _UNIT_NAME = "pixels"
 
+# Keywords that put a category in each placement zone.
+# Checked via substring match on the lowercased category name.
+_WALL_KEYWORDS    = ("bed", "wardrobe", "dresser", "shelf", "bookshelf",
+                     "cabinet", "tv_stand", "console", "wine", "desk",
+                     "dressing_table", "children_cabinet")
+_SOFA_KEYWORDS    = ("sofa", "armchair", "lounge_chair")
+_FLOOR_KEYWORDS   = ("coffee_table", "dining_table", "round_end_table",
+                     "corner_side_table")
+_BESIDE_KEYWORDS  = ("nightstand", "bedside")
+
+
+def _placement_zone(cat: str) -> str:
+    """Return 'wall', 'sofa_wall', 'floor_center', 'beside_bed', or 'anywhere'."""
+    c = cat.lower()
+    if any(k in c for k in _BESIDE_KEYWORDS):
+        return "beside_bed"
+    if any(k in c for k in _WALL_KEYWORDS):
+        return "wall"
+    if any(k in c for k in _SOFA_KEYWORDS):
+        return "sofa_wall"
+    if any(k in c for k in _FLOOR_KEYWORDS):
+        return "floor_center"
+    return "anywhere"
+
 
 def _build_system_prompt(
     available_furniture: list[str],
     class_freq: dict[str, float],
     asset_sizes: dict[str, dict[str, int]] | None = None,
+    room_type: str = "bedroom",
 ) -> str:
     freq_str = "; ".join(
         f"{obj}: {round(class_freq.get(obj, 0.0), 4)}" for obj in available_furniture
@@ -173,6 +198,60 @@ def _build_system_prompt(
     else:
         size_block = ""
 
+    # Per-category placement hints derived from category name keywords.
+    hint_lines = []
+    for cat in available_furniture:
+        zone = _placement_zone(cat)
+        if zone == "wall":
+            hint_lines.append(
+                f"  {cat} → WALL item: place with its back against a wall. "
+                f"left = length/2  for left wall;  left = max_length−length/2  for right wall; "
+                f"top = width/2  for far wall;  top = max_width−width/2  for near wall."
+            )
+        elif zone == "sofa_wall":
+            hint_lines.append(
+                f"  {cat} → SEATING: place against a wall, facing into the room."
+            )
+        elif zone == "floor_center":
+            hint_lines.append(
+                f"  {cat} → FLOOR item: place in the open floor area, away from walls, "
+                f"typically in front of a sofa or in the centre of an activity zone."
+            )
+        elif zone == "beside_bed":
+            hint_lines.append(
+                f"  {cat} → BESIDE BED: place adjacent to the bed at the same top value, "
+                f"against the nearest wall."
+            )
+    per_cat_block = "Per-item placement guide:\n" + "\n".join(hint_lines) + "\n"
+
+    # Room-type specific high-level layout description.
+    norm = room_type.lower().replace(" ", "")
+    if "bedroom" in norm:
+        room_guide = (
+            "Bedroom layout (follow this order):\n"
+            "1. Place the bed against the FAR wall (top = bed_width/2), centred left–right.\n"
+            "2. Place nightstand(s) flush beside the bed on one or both sides "
+            "(same top value, left = nightstand_length/2 or left = max−nightstand_length/2).\n"
+            "3. Place wardrobe/dresser against a SIDE wall or the NEAR wall.\n"
+            "4. Place the desk against a SIDE wall (NOT in the centre — it is a WALL item).\n"
+            "5. Place the desk chair directly in front of the desk "
+            "(same left, top = desk_top − desk_width/2 − chair_width/2 − gap), "
+            "orientation = 180° so it faces the desk.\n"
+            "6. Fill remaining wall space with shelves or cabinets.\n"
+        )
+    else:
+        room_guide = (
+            "Living-room layout (follow this order):\n"
+            "1. Place the main sofa against the FAR wall (top = sofa_width/2).\n"
+            "2. Place any secondary sofa/armchair against a SIDE wall "
+            "(orientation=90° so its back is against the wall).\n"
+            "3. Place the coffee table in the open floor zone in FRONT of the sofa "
+            "(top = sofa_top + sofa_width/2 + gap + coffee_width/2).\n"
+            "4. Place tv_stand / console against the NEAR wall "
+            "(top = max_width − tv_width/2), facing the sofa.\n"
+            "5. Place shelves/bookcases against the remaining side walls.\n"
+        )
+
     return (
         "You are a 3D indoor scene designer for commercial real estate visualisation.\n"
         "Instruction: synthesize the 3D layout of an indoor scene. "
@@ -183,29 +262,101 @@ def _build_system_prompt(
         f"FURNITURE {{length: ?{_UNIT}; width: ?{_UNIT}; height: ?{_UNIT}; "
         f"left: ?{_UNIT}; top: ?{_UNIT}; depth: ?{_UNIT}; orientation: ? degrees;}}\n"
         f"All values are in {_UNIT_NAME} but the orientation angle is in degrees.\n"
+        "COORDINATE SYSTEM: left and top are the CENTRE position of the item.\n"
+        "  To place an item flush against the LEFT wall:  left = length/2\n"
+        "  To place an item flush against the RIGHT wall: left = max_length − length/2\n"
+        "  To place an item flush against the FAR wall:   top  = width/2\n"
+        "  To place an item flush against the NEAR wall:  top  = max_width − width/2\n"
         f"{size_block}\n"
         f"Available furnitures: {', '.join(available_furniture)}\n"
         f"Overall furniture frequencies: ({freq_str})\n"
-        "Placement rules:\n"
-        "- Spread furniture across the ENTIRE room area — use the full range of left "
-        "and top values, not just the centre.\n"
-        "- Place large items (sofas, beds, wardrobes) against walls "
-        "(left ≈ 0, left ≈ max, top ≈ 0, or top ≈ max).\n"
-        "- Place small items (tables, lamps, chairs) away from walls, in the middle.\n"
+        f"\n{room_guide}\n"
+        f"{per_cat_block}\n"
+        "General rules:\n"
+        "- Use the FULL room — distribute items across different walls.\n"
         "- Do NOT place two items at the same (left, top) position.\n"
-        "- depth should be 0 for all floor-standing furniture.\n"
-        "Orientation: you may use 0, 90, 180, or 270 degrees to vary the layout.\n"
-        "CRITICAL — when an item is rotated 90° or 270°, its footprint SWAPS: "
-        "it will occupy WIDTH pixels in the horizontal (left) direction and "
-        "LENGTH pixels in the vertical (top) direction.\n"
-        "Example: a 93×28 item at orientation=90 is 28px wide and 93px tall — "
-        "so if placed at top=118 in a 146px-tall room it would extend to top=211 "
-        "which is OUT OF BOUNDS. Use orientation=0 or 180 for long items near "
-        "the top/bottom walls, and 90/270 only when the item fits in both axes.\n"
-        f"IMPORTANT: You MUST output exactly one line for EACH of the "
-        f"{len(available_furniture)} available furniture categories listed above. "
+        "- depth = 0 for all floor-standing furniture.\n"
+        "- Items must NOT overlap; maintain at least a 5px gap between bounding boxes.\n"
+        "Orientation: 0, 90, 180, or 270 degrees.\n"
+        "CRITICAL — orientation 90°/270° SWAPS length and width in the floor footprint:\n"
+        "  A length=93, width=28 item at orientation=90 occupies 28px left–right "
+        "and 93px top–bottom.  Recalculate wall margins after any rotation.\n"
+        f"IMPORTANT: Output exactly one line for EACH of the "
+        f"{len(available_furniture)} available furniture categories. "
         f"Do not skip any category.\n"
     )
+
+
+# ---------------------------------------------------------------------------
+# Default few-shot examples
+# ---------------------------------------------------------------------------
+# These demonstrate correct semantic layout (wall placement, furniture
+# relationships) and the exact pixel-centre coordinate convention.
+# Room sizes are chosen to be realistic but different from any particular
+# user scene, so the LLM must generalise rather than copy.
+
+_BEDROOM_EXAMPLE: dict = {
+    "condition": (
+        "Condition:\n"
+        "Room Type: bedroom\n"
+        "Room Size: max length 270px, max width 252px\n"
+        "Constraints: left must be 0–270px; top must be 0–252px\n"
+    ),
+    # Layout notes (not sent to LLM):
+    #   double_bed  : against far wall (top=65=130/2), centred left–right
+    #   nightstand  : flush beside bed on left side (left=25=50/2, same top)
+    #   wardrobe    : against right wall (left=220=270−100/2), mid-height
+    #   desk        : against left wall (left=55=110/2), near-wall side
+    #   chair       : in front of desk (top=155 < desk top=210), facing desk (180°)
+    "layout": (
+        "double_bed {length: 170px; width: 130px; height: 57px; "
+        "left: 135px; top: 65px; depth: 0px; orientation: 0 degrees;}\n"
+        "nightstand {length: 50px; width: 40px; height: 45px; "
+        "left: 25px; top: 65px; depth: 0px; orientation: 0 degrees;}\n"
+        "wardrobe {length: 100px; width: 45px; height: 100px; "
+        "left: 220px; top: 155px; depth: 0px; orientation: 0 degrees;}\n"
+        "desk {length: 110px; width: 55px; height: 45px; "
+        "left: 55px; top: 210px; depth: 0px; orientation: 0 degrees;}\n"
+        "chair {length: 50px; width: 50px; height: 45px; "
+        "left: 55px; top: 155px; depth: 0px; orientation: 180 degrees;}\n"
+    ),
+}
+
+_LIVINGROOM_EXAMPLE: dict = {
+    "condition": (
+        "Condition:\n"
+        "Room Type: living room\n"
+        "Room Size: max length 256px, max width 200px\n"
+        "Constraints: left must be 0–256px; top must be 0–200px\n"
+    ),
+    # Layout notes:
+    #   multi_seat_sofa : against far wall (top=40=80/2), left of centre
+    #   armchair        : against right wall, side-by-side with sofa
+    #   coffee_table    : open floor in front of sofa
+    #   tv_stand        : against near wall (top=178=200−40/2), facing sofa
+    #   bookshelf       : against left wall, mid-depth
+    "layout": (
+        "multi_seat_sofa {length: 180px; width: 80px; height: 35px; "
+        "left: 90px; top: 40px; depth: 0px; orientation: 0 degrees;}\n"
+        "armchair {length: 70px; width: 70px; height: 40px; "
+        "left: 221px; top: 40px; depth: 0px; orientation: 0 degrees;}\n"
+        "coffee_table {length: 90px; width: 50px; height: 35px; "
+        "left: 128px; top: 115px; depth: 0px; orientation: 0 degrees;}\n"
+        "tv_stand {length: 130px; width: 40px; height: 40px; "
+        "left: 128px; top: 178px; depth: 0px; orientation: 0 degrees;}\n"
+        "bookshelf {length: 50px; width: 25px; height: 70px; "
+        "left: 25px; top: 120px; depth: 0px; orientation: 0 degrees;}\n"
+    ),
+}
+
+
+def _default_few_shot_examples(room_type: str) -> list[dict]:
+    """Return built-in in-context examples for the given room type."""
+    from .tag_mapper import layoutgpt_room_key
+    key = layoutgpt_room_key(room_type)
+    if key == "bedroom":
+        return [_BEDROOM_EXAMPLE]
+    return [_LIVINGROOM_EXAMPLE]
 
 
 def _build_few_shot_messages(examples: list[dict]) -> list[dict]:
@@ -300,7 +451,12 @@ class LayoutGPTRunner:
         list of length n_results; each element is a list[Placement] for one layout.
         """
         print(f"[LayoutGPTRunner] Available categories: {available_categories}")
-        system_msg = _build_system_prompt(available_categories, class_frequencies, asset_sizes)
+        system_msg = _build_system_prompt(
+            available_categories, class_frequencies, asset_sizes,
+            room_type=formatter.room.room_type,
+        )
+        if few_shot_examples is None:
+            few_shot_examples = _default_few_shot_examples(formatter.room.room_type)
 
         _MAX_OVERLAP_RETRIES = 2
         retry_hint = ""
