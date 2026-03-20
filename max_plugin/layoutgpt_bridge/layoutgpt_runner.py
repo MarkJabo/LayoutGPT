@@ -99,8 +99,30 @@ def _parse_3d_line(line: str, unit: str = "px") -> tuple[str, dict[str, float]] 
 
 
 # ---------------------------------------------------------------------------
-# Overlap detection
+# Overlap detection and resolution
 # ---------------------------------------------------------------------------
+
+def _remove_overlapping_placements(
+    placements: list["Placement"],
+    margin_px: float = 2.0,
+) -> list["Placement"]:
+    """
+    Deterministic post-processing: iterate through placements in list order
+    (LLM's intended order — primary furniture is usually listed first) and
+    keep each item only if it does not overlap any already-accepted item.
+
+    This guarantees the returned list is overlap-free regardless of whether
+    the LLM respected the no-overlap constraint.
+    """
+    kept: list["Placement"] = []
+    for p in placements:
+        if not _overlapping_pairs_px(kept + [p], margin_px):
+            kept.append(p)
+        else:
+            print(f"[LayoutGPTRunner] Post-process removed '{p.category}' "
+                  f"(overlaps a kept item).")
+    return kept
+
 
 def _overlapping_pairs_px(
     placements: list["Placement"],
@@ -502,6 +524,10 @@ class LayoutGPTRunner:
                         continue
 
             break  # no overlaps, or retries exhausted
+
+        # Deterministic fallback: strip any remaining overlaps so nothing is
+        # ever placed on top of another item, even if the LLM ignored the hints.
+        results = [_remove_overlapping_placements(pl) for pl in results]
 
         return results
 
