@@ -135,6 +135,11 @@ def _room_info_from_entry(entry: RoomEntry) -> RoomInfo | None:
             min_x=float(mn[0].x), min_y=float(mn[0].y), min_z=float(mn[0].z),
             max_x=float(mn[1].x), max_y=float(mn[1].y), max_z=float(mn[1].z),
         )
+        print(f"[FurniturePlacer] Room bbox '{entry.node_name}': "
+              f"X[{bbox.min_x:.1f}, {bbox.max_x:.1f}]  "
+              f"Y[{bbox.min_y:.1f}, {bbox.max_y:.1f}]  "
+              f"Z[{bbox.min_z:.1f}, {bbox.max_z:.1f}]  "
+              f"size: {bbox.length_x:.1f} x {bbox.length_y:.1f}")
         return RoomInfo(name=entry.node_name, room_type=entry.room_type,
                         bbox=bbox, spline_obj=entry.node)
     except Exception as exc:
@@ -155,6 +160,10 @@ def _furniture_asset_from_entry(fentry, FurnitureAsset_cls, BoundingBox_cls):
             min_x=float(mn[0].x), min_y=float(mn[0].y), min_z=float(mn[0].z),
             max_x=float(mn[1].x), max_y=float(mn[1].y), max_z=float(mn[1].z),
         )
+        print(f"[FurniturePlacer] Furniture bbox '{fentry.node_name}' "
+              f"({fentry.category}): "
+              f"size {bbox.length_x:.1f} x {bbox.length_y:.1f} x {bbox.length_z:.1f}  "
+              f"world pos [{bbox.min_x:.1f},{bbox.max_x:.1f}] x [{bbox.min_y:.1f},{bbox.max_y:.1f}]")
         from layoutgpt_bridge.scene_bridge import FurnitureAsset
         return FurnitureAsset(
             name=fentry.node_name,

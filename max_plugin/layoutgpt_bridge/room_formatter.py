@@ -152,10 +152,14 @@ class RoomFormatter:
         # 3ds Max world Y increases UPWARD, so top must be inverted:
         #   top=0  →  max_y (far wall)
         #   top=px →  max_y - px*scale  (toward near wall)
-        # Clamp after inversion so LLM overshoots land at the wall, not outside.
         pos_x = self._origin_x + float(placement["left"]) * s
         pos_y = self.room.bbox.max_y - float(placement["top"]) * s
         pos_z = self._floor_z  + float(placement.get("depth", 0.0)) * s
+
+        # Dimensions must be computed before clamping (used for wall margin).
+        dim_x = float(placement["length"]) * s
+        dim_y = float(placement["width"])  * s
+        dim_z = float(placement["height"]) * s
 
         # Clamp centre so the furniture *body* stays inside the room.
         # Shift the allowed range inward by half the object's footprint so
@@ -172,10 +176,6 @@ class RoomFormatter:
             pos_y = max(wall_min_y, min(wall_max_y, pos_y))
         else:
             pos_y = (self.room.bbox.min_y + self.room.bbox.max_y) / 2
-
-        dim_x = float(placement["length"]) * s
-        dim_y = float(placement["width"])  * s
-        dim_z = float(placement["height"]) * s
 
         # Flipping Y changes chirality: CCW in image space → CW in world space.
         # Negate orientation so a sofa "facing down in image" faces -Y in Max.
