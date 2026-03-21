@@ -36,6 +36,9 @@ if gFP_Rooms == undefined     do gFP_Rooms     = #()
 if gFP_Furniture == undefined do gFP_Furniture = #()
 if gFP_Status == undefined    do gFP_Status    = "Ready."
 
+global gFP_DatasetDir
+if gFP_DatasetDir == undefined do gFP_DatasetDir = ""
+
 -- Simple structs  -------------------------------------------------------
 struct FP_Room (nodeName, roomType)
 struct FP_Furn (nodeName, category, roomAssign, maxCopies, rotOff)
@@ -476,11 +479,41 @@ rollout ro_Generate "4 · Generate" width:420
         spinner     spn_temp    "" range:[0.0,2.0,0.7] type:#float fieldWidth:55 align:#left
     )
 
+    group "Dataset Directory  (optional – point to unzipped data_output folder)"
+    (
+        edittext et_dataDir    ""  fieldWidth:295 align:#left
+        button   btn_browseData "Browse…" width:75 align:#right offset:[0,-26]
+    )
+
     button  btn_gen     "Generate Furniture Layout"  width:380 height:40 align:#center
     button  btn_clear   "Clear Last Layout"          width:380 height:28 align:#center
 
     label   lbl_status  "Ready." align:#left
     edittext et_log     "" height:80 width:395 readOnly:true align:#center
+
+    on ro_Generate open do (
+        local iniPath = gFP_Dir + "layoutgpt.ini"
+        local saved = getIniSetting iniPath "Settings" "DatasetDir"
+        if saved != "" do (
+            gFP_DatasetDir = saved
+            et_dataDir.text = saved
+        )
+    )
+
+    on btn_browseData pressed do (
+        local startDir = if gFP_DatasetDir != "" then gFP_DatasetDir else "C:\\"
+        local d = getSavePath caption:"Select the data_output folder" initialDir:startDir
+        if d != undefined do (
+            gFP_DatasetDir = d
+            et_dataDir.text = d
+            setIniSetting (gFP_Dir + "layoutgpt.ini") "Settings" "DatasetDir" d
+        )
+    )
+
+    on et_dataDir changed val do (
+        gFP_DatasetDir = val
+        setIniSetting (gFP_Dir + "layoutgpt.ini") "Settings" "DatasetDir" val
+    )
 
     fn _resolveBackend = (
         -- Returns (backend, apiKey, model, baseUrl)
@@ -535,6 +568,11 @@ rollout ro_Generate "4 · Generate" width:420
             then ("    'base_url'       : '" + baseUrl + "',\n") \
             else ("    'base_url'       : None,\n")
 
+        -- Use raw string (r'...') to avoid double-escaping Windows backslashes
+        local dataDirLine = if gFP_DatasetDir != "" \
+            then ("    'dataset_dir'    : r'" + gFP_DatasetDir + "',\n") \
+            else ""
+
         local pyCode = (
             "import sys, os\n" +
             "sys.path.insert(0, '" + fp_PyPath() + "')\n" +
@@ -555,6 +593,7 @@ rollout ro_Generate "4 · Generate" width:420
             "    'snap_to_floor'   : " + (if chk_snap.checked  then "True" else "False") + ",\n" +
             "    'scale_to_fit'    : " + (if chk_scale.checked then "True" else "False") + ",\n" +
             "    'registry_json'   : \"" + regEsc + "\",\n" +
+            dataDirLine +
             "}\n" +
             "result = fp.main(cfg)\n" +
             "print(result)\n"
