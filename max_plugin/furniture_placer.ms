@@ -190,11 +190,12 @@ rollout ro_Setup "1 · LLM Setup" width:420
         local chk = "import sys; sys.path.insert(0,'" + fp_PyPath() + "')\n" + \
                     "from installer import ollama_status\n" + \
                     "running,installed = ollama_status()\n" + \
-                    "print('RUNNING' if running else ('INSTALLED' if installed else 'MISSING'))\n"
+                    "print('[Ollama] ' + ('RUNNING' if running else ('INSTALLED' if installed else 'NOT INSTALLED')))\n"
         local result = fp_PyRun chk
-        if findString result "RUNNING"   != undefined then lbl_olStatus.text = "Status: ✓ Running"
-        else if findString result "INSTALLED" != undefined then lbl_olStatus.text = "Status: Installed (not running)"
-        else lbl_olStatus.text = "Status: Not installed"
+        if findString result "RUNNING"       != undefined then lbl_olStatus.text = "Status: ✓ Running"
+        else if findString result "NOT INSTALLED" != undefined then lbl_olStatus.text = "Status: Not installed"
+        else if findString result "INSTALLED"     != undefined then lbl_olStatus.text = "Status: Installed (not running)"
+        else lbl_olStatus.text = "Status: Unknown"
 
         -- Pre-fill OpenAI key from env if set
         -- Use dotNet for reliable env var reading across Max 2024-2026

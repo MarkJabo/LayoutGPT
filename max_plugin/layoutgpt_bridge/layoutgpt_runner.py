@@ -543,7 +543,7 @@ class LayoutGPTRunner:
             if not few_shot_examples:
                 few_shot_examples = _default_few_shot_examples(formatter.room.room_type)
 
-        _MAX_OVERLAP_RETRIES = 2
+        _MAX_OVERLAP_RETRIES = 4
         retry_hint = ""
 
         for attempt in range(_MAX_OVERLAP_RETRIES + 1):
@@ -576,7 +576,7 @@ class LayoutGPTRunner:
                 if bad_pairs:
                     pair_str = ", ".join(f"{a}&{b}" for a, b in bad_pairs)
                     print(f"[LayoutGPTRunner] Overlap detected ({pair_str}) "
-                          f"– retry {attempt + 1}/{_MAX_OVERLAP_RETRIES}")
+                          f"– retry {attempt + 1}/{_MAX_OVERLAP_RETRIES + 1}")
                     if attempt < _MAX_OVERLAP_RETRIES:
                         retry_hint = (
                             "IMPORTANT: the previous attempt had overlapping items "
