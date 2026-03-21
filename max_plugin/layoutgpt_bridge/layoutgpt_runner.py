@@ -20,7 +20,6 @@ from __future__ import annotations
 import json
 import math as _math
 import os
-import random as _random
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -587,11 +586,8 @@ class LayoutGPTRunner:
         retry_hint = ""
 
         for attempt in range(_MAX_OVERLAP_RETRIES + 1):
-            # Unique variation tag busts OpenAI's prompt cache on every call.
-            variation = _random.randint(10000, 99999)
             user_msg  = (
                 formatter.condition_prompt
-                + f"Variation: {variation}\n"
                 + retry_hint
                 + "Layout:\n"
             )
