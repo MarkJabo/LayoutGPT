@@ -100,8 +100,6 @@ class RoomFormatter:
             f"Condition:\n"
             f"Room Type: {display_type}\n"
             f"Room Size: max length {self.room_px_length}px, max width {self.room_px_width}px\n"
-            f"Constraints: left must be 0–{self.room_px_length}px; "
-            f"top must be 0–{self.room_px_width}px\n"
         )
 
     def room_stats(self) -> dict[str, Any]:

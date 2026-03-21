@@ -399,7 +399,6 @@ _BEDROOM_EXAMPLE: dict = {
         "Condition:\n"
         "Room Type: bedroom\n"
         "Room Size: max length 270px, max width 252px\n"
-        "Constraints: left must be 0–270px; top must be 0–252px\n"
     ),
     # Layout notes (not sent to LLM):
     #   double_bed  : against far wall (top=65=130/2), centred left–right
@@ -426,7 +425,6 @@ _LIVINGROOM_EXAMPLE: dict = {
         "Condition:\n"
         "Room Type: living room\n"
         "Room Size: max length 256px, max width 200px\n"
-        "Constraints: left must be 0–256px; top must be 0–200px\n"
     ),
     # Layout notes:
     #   multi_seat_sofa : against far wall (top=40=80/2), left of centre
@@ -845,7 +843,6 @@ def _load_one_room_boxes(
         f"Condition:\n"
         f"Room Type: {room_type}\n"
         f"Room Size: max length {length_px}px, max width {width_px}px\n"
-        f"Constraints: left must be 0\u2013{length_px}px; top must be 0\u2013{width_px}px\n"
     )
 
     layout = ""
@@ -923,6 +920,20 @@ def load_atiss_training_data(
         and os.path.exists(os.path.join(room_dir, d, "boxes.npz"))
         and (allowed_ids is None or d in allowed_ids)
     ]
+
+    # If splits filtering left no rooms (e.g. folder names don't match the
+    # bundled splits), fall back to loading every available boxes.npz so the
+    # user always gets real training examples instead of only the hardcoded
+    # defaults.
+    if not all_ids and allowed_ids is not None:
+        print(f"[LayoutGPTRunner] WARNING: 0 rooms matched splits filter "
+              f"({len(allowed_ids)} IDs checked).  Loading ALL available "
+              f"rooms instead (no filter).")
+        all_ids = [
+            d for d in os.listdir(room_dir)
+            if os.path.isdir(os.path.join(room_dir, d))
+            and os.path.exists(os.path.join(room_dir, d, "boxes.npz"))
+        ]
 
     print(f"[LayoutGPTRunner] Loading {len(all_ids)} ATISS rooms "
           f"({room_type}) from {room_dir} …")

@@ -314,6 +314,16 @@ def main(config: dict[str, Any]) -> str:
             if train_examples:
                 print(f"[FurniturePlacer] Using real ATISS data: "
                       f"{len(train_examples)} rooms loaded ({room_key})")
+            else:
+                # ATISS data directory existed but loading produced no valid
+                # examples (e.g. all rooms skipped due to errors or empty
+                # layouts).  Fall back to bundled JSON so the user still gets
+                # at least a few training examples.
+                print(f"[FurniturePlacer] WARNING: ATISS data found but 0 rooms "
+                      f"loaded — falling back to bundled examples ({room_key})")
+                train_examples = load_train_examples(data_dir, room_key)
+                train_features = None
+                target_feature = None
         else:
             # Bundled JSON fallback
             train_examples = load_train_examples(data_dir, room_key)
@@ -371,7 +381,12 @@ def main(config: dict[str, Any]) -> str:
 
     if not all_results:
         return "Done — nothing was processed."
-    return "\n".join(all_results)
+    tip = (
+        "\n\nTIP: If any asset appears backwards or rotated incorrectly, "
+        "select it in the Furniture panel and set its Rotation Offset "
+        "(e.g. 180 for a desk imported facing away from the user)."
+    )
+    return "\n".join(all_results) + tip
 
 
 if __name__ == "__main__":
