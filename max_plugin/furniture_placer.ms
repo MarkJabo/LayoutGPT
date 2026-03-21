@@ -59,36 +59,44 @@ fn fp_MigrateFurniture = (
 )
 fp_MigrateFurniture()
 
--- All LayoutGPT categories (canonical 3D-FUTURE names)
+-- All canonical ATISS/3D-FUTURE category names.
+-- This is the union of THREED_FRONT_BEDROOM_FURNITURE and
+-- THREED_FRONT_LIVINGROOM_FURNITURE from ATISS/scene_synthesis/datasets/base.py.
+-- Do NOT invent names not in this list – the LLM is trained on these exact strings.
 global gFP_AllCats
 gFP_AllCats = #(
     "armchair","bookshelf","cabinet","ceiling_lamp","chair","children_cabinet",
     "coffee_table","console_table","corner_side_table","desk",
-    "dining_chair","dining_table","double_bed","dresser","dressing_chair",
+    "dining_chair","dining_table","double_bed","dressing_chair",
     "dressing_table","floor_lamp","kids_bed","l_shaped_sofa","lounge_chair",
     "loveseat_sofa","multi_seat_sofa","nightstand","pendant_lamp",
-    "round_end_table","shelf","single_bed","stool","table","tv_stand",
+    "round_end_table","shelf","single_bed","sofa","stool","table","tv_stand",
     "wardrobe","wine_cabinet"
 )
+-- NOTE: "dresser" does NOT exist in ATISS. Dressers/chests-of-drawers are
+-- mapped to "cabinet" by the ATISS preprocessing. Register dresser assets
+-- under the "cabinet" category.
 
--- Per-room category sets (sourced from bundled dataset_stats.txt)
--- Used to grey-out furniture in the list that has no training data for the
--- selected room type, and to filter the category dropdown.
+-- Bedroom categories per THREED_FRONT_BEDROOM_FURNITURE (base.py).
+-- All sofa types collapse to "sofa"; all table types collapse to "table";
+-- dresser/chest → "cabinet".
 global gFP_BedroomCats
 gFP_BedroomCats = #(
     "double_bed","single_bed","kids_bed","nightstand","wardrobe",
-    "dresser","cabinet","shelf","bookshelf","children_cabinet",
-    "dressing_table","desk","chair","dressing_chair","stool",
-    "armchair","tv_stand","ceiling_lamp","floor_lamp","pendant_lamp",
-    "corner_side_table"
+    "cabinet","shelf","bookshelf","children_cabinet",
+    "dressing_table","dressing_chair","desk","chair","stool",
+    "armchair","tv_stand","table","sofa","coffee_table",
+    "ceiling_lamp","floor_lamp","pendant_lamp"
 )
 
+-- Living-room categories per THREED_FRONT_LIVINGROOM_FURNITURE (base.py).
 global gFP_LivingCats
 gFP_LivingCats = #(
     "multi_seat_sofa","l_shaped_sofa","loveseat_sofa","armchair","lounge_chair",
     "coffee_table","console_table","corner_side_table","round_end_table",
     "dining_table","dining_chair","tv_stand","cabinet","shelf","bookshelf",
-    "wine_cabinet","stool","ceiling_lamp","floor_lamp","pendant_lamp"
+    "wine_cabinet","stool","ceiling_lamp","floor_lamp","pendant_lamp",
+    "wardrobe","desk"
 )
 
 -- Return the room type of the single active room ("" if none).

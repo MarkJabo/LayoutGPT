@@ -4,7 +4,7 @@
     "tv_stand", "floor_lamp", "bookshelf", "cabinet", "corner_side_table",
     "pendant_lamp", "l_shaped_sofa", "loveseat_sofa", "console_table",
     "dining_table", "dining_chair", "stool", "wine_cabinet", "lounge_chair",
-    "shelf", "round_end_table"
+    "shelf", "round_end_table", "wardrobe", "desk"
   ],
   "class_frequencies": {
     "multi_seat_sofa": 0.70,
@@ -26,6 +26,8 @@
     "wine_cabinet": 0.10,
     "lounge_chair": 0.15,
     "shelf": 0.18,
-    "round_end_table": 0.12
+    "round_end_table": 0.12,
+    "wardrobe": 0.08,
+    "desk": 0.15
   }
 }

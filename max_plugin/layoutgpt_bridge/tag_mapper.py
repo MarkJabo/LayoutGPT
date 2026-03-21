@@ -26,8 +26,12 @@ This module provides:
 # ---------------------------------------------------------------------------
 # Bedroom furniture vocabulary
 # ---------------------------------------------------------------------------
+# Maps 3ds Max object name fragments to ATISS/3D-FUTURE canonical category names.
+# These canonical names MUST match what THREED_FRONT_BEDROOM_FURNITURE and
+# THREED_FRONT_LIVINGROOM_FURNITURE produce in the ATISS codebase (base.py),
+# because the boxes.npz training files encode class labels with those same names.
 _BEDROOM_MAP = {
-    # Max tag fragment          : LayoutGPT 3D-FUTURE category
+    # Max tag fragment          : ATISS canonical category
     "bed_single"                : "single_bed",
     "bed_twin"                  : "single_bed",
     "bed_double"                : "double_bed",
@@ -38,8 +42,10 @@ _BEDROOM_MAP = {
     "wardrobe"                  : "wardrobe",
     "closet"                    : "wardrobe",
     "armoire"                   : "wardrobe",
-    "dresser"                   : "dresser",
-    "chest_drawers"             : "dresser",
+    # ATISS maps "drawer chest/corner cabinet" → "cabinet" in bedroom.
+    # All dresser/chest-of-drawers assets should be registered as "cabinet".
+    "dresser"                   : "cabinet",
+    "chest_drawers"             : "cabinet",
     "cabinet_bed"               : "cabinet",
     "cabinet_storage"           : "cabinet",
     "shelf_wall"                : "shelf",
@@ -50,17 +56,27 @@ _BEDROOM_MAP = {
     "dressing_table"            : "dressing_table",
     "vanity"                    : "dressing_table",
     "tv_stand_bed"              : "tv_stand",
+    # ATISS maps corner/side tables, dining tables, round end tables → "table" in bedroom.
     "table_bed"                 : "table",
+    "side_table_bed"            : "table",
+    "end_table_bed"             : "table",
     "desk_bed"                  : "desk",
     "chair_desk"                : "chair",
     "chair_side"                : "chair",
+    # ATISS uses "dressing_chair" (from "dressing chair" in 3D-FRONT), not "desk_chair".
     "dressing_chair"            : "dressing_chair",
     "stool_bed"                 : "stool",
     "armchair_bed"              : "armchair",
     "lamp_ceiling_bed"          : "ceiling_lamp",
     "lamp_floor_bed"            : "floor_lamp",
     "lamp_pendant_bed"          : "pendant_lamp",
+    # ATISS maps "bookcase/jewelry armoire" → "bookshelf"
     "bookshelf_bed"             : "bookshelf",
+    "bookcase_bed"              : "bookshelf",
+    # ATISS bedroom collapses all sofa types → "sofa"
+    "sofa_bed"                  : "sofa",
+    "sofa_bedroom"              : "sofa",
+    "coffee_table_bed"          : "coffee_table",
 }
 
 # ---------------------------------------------------------------------------
@@ -217,20 +233,36 @@ def layoutgpt_room_key(room_type: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Full sorted list of every LayoutGPT / 3D-FUTURE category
-# Used to populate UI dropdowns; order is bedroom types first, then living-room
+# Full sorted list of ATISS/3D-FUTURE canonical categories
+# Union of THREED_FRONT_BEDROOM_FURNITURE and THREED_FRONT_LIVINGROOM_FURNITURE
+# values from ATISS/scene_synthesis/datasets/base.py.
+# This is the definitive set — no invented names like "dresser" or "chest_of_drawers".
 # ---------------------------------------------------------------------------
 ALL_LAYOUTGPT_CATEGORIES: list[str] = sorted({
-    # Bedroom
-    "single_bed", "double_bed", "kids_bed",
-    "wardrobe", "dresser", "cabinet", "shelf", "children_cabinet",
-    "nightstand", "dressing_table", "tv_stand", "table", "desk",
-    "chair", "dressing_chair", "stool", "armchair",
-    "ceiling_lamp", "floor_lamp", "pendant_lamp", "bookshelf",
-    # Living room (adds / overlaps)
+    # Bedroom-specific ATISS categories
+    "double_bed", "single_bed", "kids_bed",
+    "nightstand", "wardrobe",
+    "dressing_table", "dressing_chair",
+    "table",           # corner/side/end/dining tables in bedroom context
+    "sofa",            # all sofa types collapsed to "sofa" in bedroom context
+    "coffee_table",    # appears in bedroom training data
+    # Shared bedroom + living-room
+    "cabinet",         # covers cabinets AND dresser/chest-of-drawers (ATISS maps both to "cabinet")
+    "children_cabinet",
+    "shelf",
+    "bookshelf",       # "bookcase/jewelry armoire" → "bookshelf"
+    "desk",
+    "chair",           # covers desk chairs, dining chairs in bedroom; lounge chairs too
+    "armchair",
+    "stool",
+    "tv_stand",
+    "ceiling_lamp",
+    "floor_lamp",
+    "pendant_lamp",
+    # Living-room-specific ATISS categories
+    "multi_seat_sofa", "l_shaped_sofa", "loveseat_sofa",
     "lounge_chair", "dining_chair",
-    "l_shaped_sofa", "loveseat_sofa", "multi_seat_sofa",
-    "coffee_table", "dining_table", "console_table",
-    "corner_side_table", "round_end_table",
+    "dining_table", "console_table", "corner_side_table", "round_end_table",
     "wine_cabinet",
+    "wardrobe",        # appears in some living-room scenes too
 })
