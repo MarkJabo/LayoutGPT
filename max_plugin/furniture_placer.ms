@@ -637,6 +637,51 @@ rollout ro_Generate "4 · Generate" width:420
     )
 
     on btn_gen pressed do (
+        -- ---------------------------------------------------------------
+        -- Pre-generation: warn about categories rarely seen in this room
+        -- type in the ATISS training data (frequency < 10 %).
+        -- ---------------------------------------------------------------
+        local roomType = fp_CurrentRoomType()
+        if roomType != "" and gFP_Furniture.count > 0 do (
+            -- Resolve dataset_stats.txt: prefer user-supplied dataset_dir,
+            -- fall back to the bundled data inside the plugin folder.
+            local statsDir = if gFP_DatasetDir != "" then gFP_DatasetDir \
+                             else (gFP_Dir + "data")
+
+            -- Build a Python list literal of all asset categories.
+            local catListPy = "["
+            for f in gFP_Furniture do catListPy += "'" + f.category + "',"
+            catListPy += "]"
+
+            local rareCode = (
+                "import sys, os, json\n" +
+                "stats_path = os.path.join(r'" + statsDir + "', '" + roomType + "', 'dataset_stats.txt')\n" +
+                "try:\n" +
+                "    with open(stats_path) as _f: _s = json.load(_f)\n" +
+                "    freqs = _s.get('class_frequencies', {})\n" +
+                "except: freqs = {}\n" +
+                "checked = " + catListPy + "\n" +
+                "seen = set(checked)\n" +
+                "rare = sorted(set(c for c in seen if freqs.get(c, 0.0) < 0.10))\n" +
+                "print(','.join(rare) if rare else '')\n"
+            )
+            local rareResult = fp_PyRun rareCode default:""
+            if rareResult != "" do (
+                local rareList = filterString rareResult ","
+                local msg = ("Warning: the following categories appear in fewer than 10% of " +
+                             roomType + " training scenes:\n\n")
+                for r in rareList do msg += "  -  " + r + "\n"
+                msg += ("\nThe model has little training data for these placements and may " +
+                        "produce poor results.\nConsider reassigning to a more common category, " +
+                        "or switch room type.\n\nProceed anyway?")
+                local go = queryBox msg title:"Rare Category Warning" beep:false
+                if not go do (
+                    lbl_status.text = "Cancelled."
+                    return()
+                )
+            )
+        )
+
         lbl_status.text = "Running… (see MAXScript Listener for live output)"
         et_log.text     = ""
         windows.processPostedMessages()
