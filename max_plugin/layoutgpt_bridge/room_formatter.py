@@ -158,35 +158,9 @@ class RoomFormatter:
         pos_y = self.room.bbox.max_y - float(placement["top"]) * s
         pos_z = self._floor_z  + float(placement.get("depth", 0.0)) * s
 
-        # Dimensions must be computed before clamping (used for wall margin).
         dim_x = float(placement["length"]) * s
         dim_y = float(placement["width"])  * s
         dim_z = float(placement["height"]) * s
-
-        # Clamp centre so the furniture *body* stays inside the room.
-        # The wall margin must account for the ROTATED footprint, not the
-        # unrotated prototype dimensions.  A 90°/270° rotation swaps X and Y
-        # extents, and arbitrary angles produce larger AABB extents via:
-        #   half_aabb_x = |cos θ| * (dim_x/2) + |sin θ| * (dim_y/2)
-        #   half_aabb_y = |sin θ| * (dim_x/2) + |cos θ| * (dim_y/2)
-        orientation_rad = math.radians(abs(float(placement.get("orientation", 0.0))))
-        cos_a = abs(math.cos(orientation_rad))
-        sin_a = abs(math.sin(orientation_rad))
-        rotated_half_x = cos_a * (dim_x / 2) + sin_a * (dim_y / 2)
-        rotated_half_y = sin_a * (dim_x / 2) + cos_a * (dim_y / 2)
-
-        wall_min_x = self.room.bbox.min_x + rotated_half_x
-        wall_max_x = self.room.bbox.max_x - rotated_half_x
-        wall_min_y = self.room.bbox.min_y + rotated_half_y
-        wall_max_y = self.room.bbox.max_y - rotated_half_y
-        if wall_min_x < wall_max_x:
-            pos_x = max(wall_min_x, min(wall_max_x, pos_x))
-        else:  # asset wider than room – fall back to centring
-            pos_x = (self.room.bbox.min_x + self.room.bbox.max_x) / 2
-        if wall_min_y < wall_max_y:
-            pos_y = max(wall_min_y, min(wall_max_y, pos_y))
-        else:
-            pos_y = (self.room.bbox.min_y + self.room.bbox.max_y) / 2
 
         # Flipping Y changes chirality: CCW in image space → CW in world space.
         # Negate orientation so a sofa "facing down in image" faces -Y in Max.

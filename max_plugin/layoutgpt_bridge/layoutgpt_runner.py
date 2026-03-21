@@ -136,272 +136,36 @@ def _sort_by_priority(categories: list[str], room_type: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Overlap detection and resolution
-# ---------------------------------------------------------------------------
-
-def _clashes_with_kept(
-    candidate: "Placement",
-    kept: list["Placement"],
-    margin_px: float = 2.0,
-) -> bool:
-    """
-    Return True if *candidate*'s bounding box overlaps any item in *kept*.
-
-    Tests each kept item individually against the candidate so that
-    pre-existing overlaps among kept items cannot cause false rejections.
-    """
-    # Build a tiny 2-element list for each kept item and test only that pair.
-    for existing in kept:
-        if _overlapping_pairs_px([existing, candidate], margin_px):
-            return True
-    return False
-
-
-def _remove_overlapping_placements(
-    placements: list["Placement"],
-    margin_px: float = 2.0,
-) -> list["Placement"]:
-    """
-    Deterministic post-processing: iterate through placements in list order
-    (LLM's intended order — primary furniture is usually listed first) and
-    keep each item only if it does not overlap any already-accepted item.
-
-    This guarantees the returned list is overlap-free regardless of whether
-    the LLM respected the no-overlap constraint.
-    """
-    kept: list["Placement"] = []
-    for p in placements:
-        if not _clashes_with_kept(p, kept, margin_px):
-            kept.append(p)
-        else:
-            print(f"[LayoutGPTRunner] Post-process removed '{p.category}' "
-                  f"(overlaps a kept item).")
-    return kept
-
-
-_BED_CATEGORIES    = {"double_bed", "single_bed"}
-_NS_CATEGORIES     = {"nightstand"}
-
-
-def _snap_nightstands_to_bed(
-    placements: list["Placement"],
-    room_length_px: int,
-    room_width_px: int,
-    formatter: "RoomFormatter",
-) -> list["Placement"]:
-    """
-    Deterministically move nightstands to be immediately adjacent to the bed.
-
-    Uses the bed's actual orientation to determine which axis is the "side"
-    axis (the one nightstands belong beside).  For a 0°/180° bed the side
-    axis is left/right (X); for a 90°/270° bed it is top/bottom (Y).
-
-    After mutating p.px, p.scene is recomputed so the placement engine sees
-    the corrected world coordinates.
-    """
-    bed = next((p for p in placements if p.category in _BED_CATEGORIES), None)
-    nightstands = [p for p in placements if p.category in _NS_CATEGORIES]
-    if bed is None or not nightstands:
-        return placements
-
-    bed_cx  = bed.px["left"]
-    bed_cy  = bed.px["top"]
-    bed_ori = bed.px.get("orientation", 0.0) % 180  # treat 0 == 180, 90 == 270
-
-    # Which dimension of the bed spans the "side" axis?
-    # At 0°:  length is along X → nightstands go left/right.
-    # At 90°: length is along Y → nightstands go above/below.
-    if abs(bed_ori) < 45 or abs(bed_ori - 180) < 45:
-        # Near-0° or near-180°: side axis = X (left/right)
-        bed_half = bed.px["length"] / 2.0
-        sides = [(-1, 0), (+1, 0)]   # (dx_sign, dy_sign)
-        ns_half_key = "length"
-        clamp_lo, clamp_hi = room_length_px, room_width_px
-    else:
-        # Near-90° or near-270°: side axis = Y (top/bottom)
-        bed_half = bed.px["width"] / 2.0
-        sides = [(0, -1), (0, +1)]
-        ns_half_key = "width"
-        clamp_lo, clamp_hi = room_length_px, room_width_px
-
-    for ns, (dx_sign, dy_sign) in zip(nightstands, sides):
-        ns_half = ns.px[ns_half_key] / 2.0
-        gap = 1.0  # 1px breathing room so they don't share floor area
-        if dx_sign != 0:
-            new_cx = bed_cx + dx_sign * (bed_half + ns_half + gap)
-            new_cy = bed_cy
-            lo, hi = ns_half, room_length_px - ns_half
-            if lo <= new_cx <= hi:
-                ns.px["left"] = new_cx
-                ns.px["top"]  = new_cy
-                ns.scene = formatter.from_px(ns.px)
-        else:
-            new_cx = bed_cx
-            new_cy = bed_cy + dy_sign * (bed_half + ns_half + gap)
-            lo, hi = ns_half, room_width_px - ns_half
-            if lo <= new_cy <= hi:
-                ns.px["left"] = new_cx
-                ns.px["top"]  = new_cy
-                ns.scene = formatter.from_px(ns.px)
-    return placements
-
-
-def _overlapping_pairs_px(
-    placements: list["Placement"],
-    margin_px: float = 2.0,
-) -> list[tuple[str, str]]:
-    """
-    Return (cat_a, cat_b) pairs whose *pixel-space* bounding boxes overlap.
-
-    We check pixel space (the LLM's intended positions) rather than world
-    space so that wall-clamping artifacts don't produce false positives.
-    A common false positive: an L-shaped sofa has a large AABB that covers
-    its own open corner; a coffee table placed in that corner is fine
-    physically but looks like a world-space collision.
-
-    In pixel space: left/top are CENTER coords; length/width are axes before
-    rotation; orientation (CCW degrees) swaps the axes for 90°/270° items.
-    """
-    boxes = []
-    for p in placements:
-        cx  = p.px["left"]
-        cy  = p.px["top"]
-        a   = _math.radians(p.px.get("orientation", 0.0))
-        ca, sa = abs(_math.cos(a)), abs(_math.sin(a))
-        hx  = ca * p.px["length"] / 2 + sa * p.px["width"] / 2
-        hy  = sa * p.px["length"] / 2 + ca * p.px["width"] / 2
-        boxes.append((p.category, cx - hx, cx + hx, cy - hy, cy + hy))
-
-    overlaps = []
-    for i in range(len(boxes)):
-        for j in range(i + 1, len(boxes)):
-            cat_a, ax1, ax2, ay1, ay2 = boxes[i]
-            cat_b, bx1, bx2, by1, by2 = boxes[j]
-            if (ax1 + margin_px < bx2 and ax2 - margin_px > bx1 and
-                    ay1 + margin_px < by2 and ay2 - margin_px > by1):
-                overlaps.append((cat_a, cat_b))
-    return overlaps
-
-
-# ---------------------------------------------------------------------------
 # System / user prompt builders  (mirrors form_prompt_for_chatgpt)
 # ---------------------------------------------------------------------------
 
 _UNIT = "px"
 _UNIT_NAME = "pixels"
 
-# Keywords that put a category in each placement zone.
-# Checked via substring match on the lowercased category name.
-_WALL_KEYWORDS    = ("bed", "wardrobe", "dresser", "shelf", "bookshelf",
-                     "cabinet", "tv_stand", "console", "wine", "desk",
-                     "dressing_table", "children_cabinet")
-_SOFA_KEYWORDS    = ("sofa", "armchair", "lounge_chair")
-_FLOOR_KEYWORDS   = ("coffee_table", "dining_table", "round_end_table",
-                     "corner_side_table")
-_BESIDE_KEYWORDS  = ("nightstand", "bedside")
-
-
-def _placement_zone(cat: str) -> str:
-    """Return 'wall', 'sofa_wall', 'floor_center', 'beside_bed', or 'anywhere'."""
-    c = cat.lower()
-    if any(k in c for k in _BESIDE_KEYWORDS):
-        return "beside_bed"
-    if any(k in c for k in _WALL_KEYWORDS):
-        return "wall"
-    if any(k in c for k in _SOFA_KEYWORDS):
-        return "sofa_wall"
-    if any(k in c for k in _FLOOR_KEYWORDS):
-        return "floor_center"
-    return "anywhere"
-
-
-def _required_items_block(
-    available_furniture: list[str],
-    category_counts: dict[str, int] | None,
-) -> str:
-    """
-    Build the closing IMPORTANT instruction listing every category and how many
-    CSS lines to generate.  Single-copy items are required; multi-copy items
-    say 'up to N' so the LLM places as many as fit naturally — the placement
-    engine will pick from available copies, and the overlap post-processor
-    removes any that can't be spaced correctly.
-    """
-    counts = category_counts or {}
-    required_lines = []
-    optional_lines = []
-    for cat in available_furniture:
-        n = counts.get(cat, 1)
-        if n == 1:
-            required_lines.append(f"  1 × {cat}  (required — output exactly 1 line)")
-        else:
-            optional_lines.append(
-                f"  up to {n} × {cat}  "
-                f"(output 2–{n} lines if space permits; at least 1)"
-            )
-    all_lines = required_lines + optional_lines
-    item_list = "\n".join(all_lines)
-    return (
-        f"IMPORTANT: Output CSS lines for the following items:\n"
-        f"{item_list}\n"
-        "Required items (count = 1) MUST always appear.\n"
-        "For items with 'up to N' copies, place as many as fit "
-        "without crowding — prioritise good spacing over quantity.\n"
-        "Do NOT add items not listed above.\n"
-        "Multiple copies of the same category must be well-separated "
-        "from each other and clearly spaced from other furniture.\n"
-    )
-
 
 def _build_system_prompt(
     available_furniture: list[str],
     class_freq: dict[str, float],
-    asset_sizes: dict[str, dict[str, int]] | None = None,
-    room_type: str = "bedroom",
-    category_counts: dict[str, int] | None = None,
 ) -> str:
+    """
+    Build the ChatGPT system prompt exactly as in run_layoutgpt_3d.py
+    form_prompt_for_chatgpt().  No custom additions.
+    """
     freq_str = "; ".join(
         f"{obj}: {round(class_freq.get(obj, 0.0), 4)}" for obj in available_furniture
     )
-
-    # Asset size block: tell the LLM the measured real dimensions so it doesn't
-    # invent them.  The original paper derived sizes from the 3D-FUTURE dataset;
-    # here we measure from the actual Max scene assets.
-    if asset_sizes:
-        size_lines = "\n".join(
-            f"  {cat}: length={asset_sizes[cat]['length']}px, "
-            f"width={asset_sizes[cat]['width']}px, "
-            f"height={asset_sizes[cat]['height']}px"
-            for cat in available_furniture
-            if cat in asset_sizes
-        )
-        size_block = (
-            f"Asset sizes (use these exact values for length/width/height):\n"
-            f"{size_lines}\n\n"
-        )
-    else:
-        size_block = ""
-
     return (
-        # --- Identical to the paper's ChatGPT system prompt (form_prompt_for_chatgpt) ---
         "You are a 3D indoor scene designer.\n"
         "Instruction: synthesize the 3D layout of an indoor scene. "
         "The generated 3D layout should follow the CSS style, where each line starts "
         "with the furniture category and is followed by the 3D size, orientation and "
         "absolute position. "
         "Formally, each line should follow the template:\n"
-        f"FURNITURE {{length: ?{_UNIT}; width: ?{_UNIT}; height: ?{_UNIT}; "
-        f"left: ?{_UNIT}; top: ?{_UNIT}; depth: ?{_UNIT}; orientation: ? degrees;}}\n"
+        f"FURNITURE {{length: ?{_UNIT}: width: ?{_UNIT}; height: ?{_UNIT}; "
+        f"orientation: ? degrees; left: ?{_UNIT}; top: ?{_UNIT}; depth: ?{_UNIT};}}\n"
         f"All values are in {_UNIT_NAME} but the orientation angle is in degrees.\n\n"
-        # --- Coordinate convention ---
-        "Note: left and top are the CENTRE of the item's floor footprint. "
-        "depth = 0 for all floor-standing furniture.\n\n"
-        # --- Asset sizes (replaces the paper's dataset-statistics-derived sizes) ---
-        f"{size_block}"
-        # --- Category list and frequencies (verbatim from the paper) ---
         f"Available furnitures: {', '.join(available_furniture)}\n"
         f"Overall furniture frequencies: ({freq_str})\n\n"
-        # --- Required items (needed because we have no k-similar retrieval) ---
-        + _required_items_block(available_furniture, category_counts)
     )
 
 
@@ -427,15 +191,15 @@ _BEDROOM_EXAMPLE: dict = {
     #   chair       : in front of desk (top=155 < desk top=210), facing desk (180°)
     "layout": (
         "double_bed {length: 170px; width: 130px; height: 57px; "
-        "left: 135px; top: 65px; depth: 0px; orientation: 0 degrees;}\n"
+        "orientation: 0 degrees; left: 135px; top: 65px; depth: 0px;}\n"
         "nightstand {length: 50px; width: 40px; height: 45px; "
-        "left: 25px; top: 65px; depth: 0px; orientation: 0 degrees;}\n"
+        "orientation: 0 degrees; left: 25px; top: 65px; depth: 0px;}\n"
         "wardrobe {length: 100px; width: 45px; height: 100px; "
-        "left: 220px; top: 155px; depth: 0px; orientation: 0 degrees;}\n"
+        "orientation: 0 degrees; left: 220px; top: 155px; depth: 0px;}\n"
         "desk {length: 110px; width: 55px; height: 45px; "
-        "left: 55px; top: 210px; depth: 0px; orientation: 0 degrees;}\n"
+        "orientation: 0 degrees; left: 55px; top: 210px; depth: 0px;}\n"
         "chair {length: 50px; width: 50px; height: 45px; "
-        "left: 55px; top: 155px; depth: 0px; orientation: 180 degrees;}\n"
+        "orientation: 180 degrees; left: 55px; top: 155px; depth: 0px;}\n"
     ),
 }
 
@@ -453,15 +217,15 @@ _LIVINGROOM_EXAMPLE: dict = {
     #   bookshelf       : against left wall, mid-depth
     "layout": (
         "multi_seat_sofa {length: 180px; width: 80px; height: 35px; "
-        "left: 90px; top: 40px; depth: 0px; orientation: 0 degrees;}\n"
+        "orientation: 0 degrees; left: 90px; top: 40px; depth: 0px;}\n"
         "armchair {length: 70px; width: 70px; height: 40px; "
-        "left: 221px; top: 40px; depth: 0px; orientation: 0 degrees;}\n"
+        "orientation: 0 degrees; left: 221px; top: 40px; depth: 0px;}\n"
         "coffee_table {length: 90px; width: 50px; height: 35px; "
-        "left: 128px; top: 115px; depth: 0px; orientation: 0 degrees;}\n"
+        "orientation: 0 degrees; left: 128px; top: 115px; depth: 0px;}\n"
         "tv_stand {length: 130px; width: 40px; height: 40px; "
-        "left: 128px; top: 178px; depth: 0px; orientation: 0 degrees;}\n"
+        "orientation: 0 degrees; left: 128px; top: 178px; depth: 0px;}\n"
         "bookshelf {length: 50px; width: 25px; height: 70px; "
-        "left: 25px; top: 120px; depth: 0px; orientation: 0 degrees;}\n"
+        "orientation: 0 degrees; left: 25px; top: 120px; depth: 0px;}\n"
     ),
 }
 
@@ -549,14 +313,17 @@ class LayoutGPTRunner:
         class_frequencies: dict[str, float],
         few_shot_examples: list[dict] | None = None,
         n_results: int = 1,
-        asset_sizes: dict[str, dict[str, int]] | None = None,
-        category_counts: dict[str, int] | None = None,
         train_examples: dict[str, dict] | None = None,
         train_features: dict[str, Any] | None = None,
         target_feature: Any = None,
+        # Kept for API compatibility but no longer used:
+        asset_sizes: dict[str, dict[str, int]] | None = None,
+        category_counts: dict[str, int] | None = None,
     ) -> list[list[Placement]]:
         """
         Generate furniture placements for a room.
+
+        Mirrors run_layoutgpt_3d.py exactly: single API call, no post-processing.
 
         Parameters
         ----------
@@ -567,7 +334,7 @@ class LayoutGPTRunner:
         n_results           : number of independent layout variations to generate
         train_examples      : dict of example rooms for k-similar retrieval
         train_features      : dict of 64×64 floor plan arrays (ATISS data)
-        target_feature      : 64×64 array for the target room (ATISS path)
+        target_feature      : 64×64 array for the target room
 
         Returns
         -------
@@ -577,22 +344,19 @@ class LayoutGPTRunner:
         # (bed, sofa) before accessories (chairs, lamps, side-tables).
         ordered_cats = _sort_by_priority(available_categories, formatter.room.room_type)
         print(f"[LayoutGPTRunner] Available categories (ordered): {ordered_cats}")
-        print(f"[LayoutGPTRunner] Category counts: {category_counts}")
-        system_msg = _build_system_prompt(
-            ordered_cats, class_frequencies, asset_sizes,
-            room_type=formatter.room.room_type,
-            category_counts=category_counts,
-        )
+
+        # System prompt: verbatim from the paper's form_prompt_for_chatgpt()
+        system_msg = _build_system_prompt(ordered_cats, class_frequencies)
+
+        # Select k-similar in-context examples
         if few_shot_examples is None:
             if train_examples and train_features and target_feature is not None:
-                # Real ATISS data: use 64×64 floor-plan bitmap features
                 few_shot_examples = select_similar_examples_by_feature(
                     train_examples, train_features, target_feature, k=8)
-                print(f"[LayoutGPTRunner] k-similar (floor plan bitmaps): "
+                print(f"[LayoutGPTRunner] k-similar (floor plan): "
                       f"selected {len(few_shot_examples)} examples "
                       f"for {formatter.room_px_length}×{formatter.room_px_width}px room")
             elif train_examples:
-                # Fallback: dimension-based L2 (bundled JSON examples)
                 few_shot_examples = select_similar_examples(
                     train_examples,
                     formatter.room_px_length,
@@ -605,59 +369,20 @@ class LayoutGPTRunner:
             if not few_shot_examples:
                 few_shot_examples = _default_few_shot_examples(formatter.room.room_type)
 
-        _MAX_OVERLAP_RETRIES = 4
-        retry_hint = ""
+        user_msg = formatter.condition_prompt + "Layout:\n"
+        print(f"[LayoutGPTRunner] User prompt:\n{user_msg}")
 
-        for attempt in range(_MAX_OVERLAP_RETRIES + 1):
-            user_msg  = (
-                formatter.condition_prompt
-                + retry_hint
-                + "Layout:\n"
-            )
-            if attempt == 0:
-                print(f"[LayoutGPTRunner] User prompt:\n{user_msg}")
+        messages: list[dict] = [{"role": "system", "content": system_msg}]
+        if few_shot_examples:
+            messages.extend(_build_few_shot_messages(few_shot_examples))
+        messages.append({"role": "user", "content": user_msg})
 
-            messages: list[dict] = [{"role": "system", "content": system_msg}]
-            if few_shot_examples:
-                messages.extend(_build_few_shot_messages(few_shot_examples))
-            messages.append({"role": "user", "content": user_msg})
+        raw_content = self._call_api(messages, n=n_results)
 
-            raw_content = self._call_api(messages, n=n_results)
-
-            results: list[list[Placement]] = []
-            for content in raw_content:
-                placements = self._parse_response(content, formatter, asset_sizes)
-                placements = _snap_nightstands_to_bed(
-                    placements,
-                    formatter.room_px_length,
-                    formatter.room_px_width,
-                    formatter,
-                )
-                results.append(placements)
-
-            # Check the first result for overlaps in pixel space; retry if found.
-            if results:
-                bad_pairs = _overlapping_pairs_px(results[0])
-                if bad_pairs:
-                    pair_str = ", ".join(f"{a}&{b}" for a, b in bad_pairs)
-                    print(f"[LayoutGPTRunner] Overlap detected ({pair_str}) "
-                          f"– retry {attempt + 1}/{_MAX_OVERLAP_RETRIES + 1}")
-                    if attempt < _MAX_OVERLAP_RETRIES:
-                        retry_hint = (
-                            "IMPORTANT: the previous attempt had overlapping items "
-                            f"({pair_str}). Re-space them so no two items share "
-                            "floor area. Remember: rotating 90°/270° swaps "
-                            "length↔width in the top axis.\n"
-                        )
-                        continue
-
-            break  # no overlaps, or retries exhausted
-
-        # Strip any remaining overlaps from the final layout deterministically.
-        # The LLM's training data is responsible for producing correct spatial
-        # relationships — custom post-processing that moves items overrides that
-        # learned behaviour and produces incorrect results.
-        results = [_remove_overlapping_placements(pl) for pl in results]
+        results: list[list[Placement]] = []
+        for content in raw_content:
+            placements = self._parse_response(content, formatter)
+            results.append(placements)
 
         return results
 
@@ -696,7 +421,6 @@ class LayoutGPTRunner:
         self,
         content: str,
         formatter: RoomFormatter,
-        asset_px_sizes: dict[str, dict[str, int]] | None = None,
     ) -> list[Placement]:
         print(f"[LayoutGPTRunner] Raw LLM response:\n{content}")
         # Collapse multi-line CSS blocks into single lines so the parser handles
@@ -716,26 +440,9 @@ class LayoutGPTRunner:
             if category is None:
                 continue
 
-            # Replace LLM-specified dimensions with actual measured asset
-            # dimensions.  LLMs reliably get centers (left/top) right but
-            # consistently swap length↔width (putting the larger value first
-            # regardless of which axis it belongs to).  Using real dimensions
-            # ensures wall-clamping, overlap detection, and the nightstand-snap
-            # all work against the true footprint of the asset in 3ds Max.
-            if asset_px_sizes and category in asset_px_sizes:
-                adims = asset_px_sizes[category]
-                px_placement["length"] = float(adims["length"])
-                px_placement["width"]  = float(adims["width"])
-                px_placement["height"] = float(adims["height"])
-
             try:
                 scene_placement = formatter.from_px(px_placement)
             except (KeyError, TypeError, ValueError):
-                continue
-
-            # Bounds check – discard furniture outside the room
-            if not formatter.placement_in_bounds(scene_placement):
-                print(f"[LayoutGPTRunner] {category} out of bounds – skipping")
                 continue
 
             placements.append(Placement(
@@ -924,8 +631,8 @@ def _load_one_room_boxes(
             dz = int(dz / norm * scale)
         layout += (
             f"{cat} {{length: {l}px; width: {w}px; height: {h}px; "
-            f"left: {dx}px; top: {dy}px; depth: {dz}px; "
-            f"orientation: {orientation} degrees;}}\n"
+            f"orientation: {orientation} degrees; "
+            f"left: {dx}px; top: {dy}px; depth: {dz}px;}}\n"
         )
 
     feature = _resize_bitmap(data["room_layout"], 64)
