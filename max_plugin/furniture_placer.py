@@ -333,23 +333,6 @@ def main(config: dict[str, Any]) -> str:
                 print(f"[FurniturePlacer] Loaded {len(train_examples)} bundled train examples "
                       f"for k-similar retrieval ({room_key})")
 
-        # Measure actual asset footprints and pass to LLM so it can reason
-        # about real sizes rather than guessing from category statistics.
-        asset_px_sizes: dict[str, dict[str, int]] = {}
-        # category_counts: how many copies the engine may place per category
-        # (library stores repeated entries for max_instances > 1)
-        category_counts: dict[str, int] = {}
-        for cat, assets in library.items():
-            a = assets[0]  # use first asset as representative
-            asset_px_sizes[cat] = {
-                "length": max(1, int(round(a.bbox.length_x * formatter._scale))),
-                "width":  max(1, int(round(a.bbox.length_y * formatter._scale))),
-                "height": max(1, int(round(a.bbox.length_z * formatter._scale))),
-            }
-            category_counts[cat] = len(assets)
-        print(f"[FurniturePlacer] Asset px sizes: {asset_px_sizes}")
-        print(f"[FurniturePlacer] Category counts: {category_counts}")
-
         print(f"\n[FurniturePlacer] Generating layout for '{room_entry.node_name}' …")
         print(f"  {formatter.condition_prompt.strip()}")
 
@@ -359,8 +342,6 @@ def main(config: dict[str, Any]) -> str:
                 available_categories = available_cats,
                 class_frequencies    = class_freq,
                 n_results            = 1,
-                asset_sizes          = asset_px_sizes,
-                category_counts      = category_counts,
                 train_examples       = train_examples,
                 train_features       = train_features,
                 target_feature       = target_feature,
