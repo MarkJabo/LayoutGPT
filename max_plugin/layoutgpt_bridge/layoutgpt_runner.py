@@ -839,9 +839,19 @@ def _load_one_room_boxes(
     length_px = int(room_length / norm * scale)
     width_px  = int(room_width  / norm * scale)
 
+    # Mirror run_layoutgpt_3d.py lines 74-80: LivingDiningRoom scenes use
+    # a combined label so the LLM condition matches the training data format.
+    room_id = os.path.basename(os.path.dirname(npz_path))
+    if room_type == "livingroom" and "dining" in room_id.lower():
+        display_room_type = "living room & dining room"
+    elif room_type == "livingroom":
+        display_room_type = "living room"
+    else:
+        display_room_type = room_type  # "bedroom" (all subtypes share the same label)
+
     condition = (
         f"Condition:\n"
-        f"Room Type: {room_type}\n"
+        f"Room Type: {display_room_type}\n"
         f"Room Size: max length {length_px}px, max width {width_px}px\n"
     )
 
@@ -907,12 +917,20 @@ def load_atiss_training_data(
     if not os.path.isdir(room_dir):
         return {}, {}
 
-    # Filter to rect_train split if splits file is provided
+    # Filter to training split if splits file is provided.
+    # Prefer the full 'train' split over 'rect_train': rect_train only contains
+    # rectangular floor-plan rooms (a subset used by the original paper's
+    # evaluation pipeline), but for ICL training examples we want as many
+    # diverse rooms as possible.  'train' gives ~60% more bedrooms and
+    # ~270% more living rooms while still excluding the held-out test rooms.
     allowed_ids: "set[str] | None" = None
     if splits_json_path and os.path.exists(splits_json_path):
         with open(splits_json_path, "r") as fh:
             splits = json.load(fh)
-        allowed_ids = set(splits.get("rect_train") or splits.get("train", []))
+        # train > rect_train > empty; never use test/val splits
+        allowed_ids = set(
+            splits.get("train") or splits.get("rect_train") or []
+        )
 
     all_ids = [
         d for d in os.listdir(room_dir)
