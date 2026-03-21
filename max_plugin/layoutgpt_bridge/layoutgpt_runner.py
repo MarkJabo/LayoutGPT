@@ -565,6 +565,186 @@ def _make_target_bitmap(length_px: int, width_px: int,
     return _resize_bitmap(arr, out)
 
 
+# ---------------------------------------------------------------------------
+# Floor-plan extraction from 3ds Max mesh geometry
+# ---------------------------------------------------------------------------
+
+def _convex_hull_2d(pts: Any) -> Any:
+    """
+    Graham-scan convex hull for a set of 2-D points.
+
+    Parameters
+    ----------
+    pts : (N, 2) numpy array
+
+    Returns
+    -------
+    (M, 2) numpy array of hull vertices in counter-clockwise order.
+    Returns pts directly when N < 3.
+    """
+    import numpy as _np
+    pts = _np.unique(pts, axis=0).astype(_np.float64)
+    if len(pts) < 3:
+        return pts
+
+    # Pivot: lowest Y, then leftmost X
+    idx = _np.lexsort((pts[:, 0], pts[:, 1]))[0]
+    pivot = pts[idx]
+    others = _np.delete(pts, idx, axis=0)
+
+    dx = others[:, 0] - pivot[0]
+    dy = others[:, 1] - pivot[1]
+    angles = _np.arctan2(dy, dx)
+    dists  = dx * dx + dy * dy
+
+    order      = _np.lexsort((dists, angles))
+    sorted_pts = _np.vstack([pivot, others[order]])
+
+    # Graham scan
+    hull: list = [sorted_pts[0], sorted_pts[1]]
+    for i in range(2, len(sorted_pts)):
+        p = sorted_pts[i]
+        while len(hull) >= 2:
+            a, b = hull[-2], hull[-1]
+            cross = (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])
+            if cross <= 0:
+                hull.pop()
+            else:
+                break
+        hull.append(p)
+    return _np.array(hull)
+
+
+def _rasterize_convex_polygon(hull_pts: Any, H: int, W: int) -> Any:
+    """
+    Rasterize a convex polygon to an H×W binary image (uint8, 0/255).
+
+    Uses vectorised cross-product containment test (no external libs).
+    hull_pts : (M, 2) float array of vertex coordinates in (col, row) / (x, y)
+               image space — i.e. col ∈ [0, W), row ∈ [0, H).
+    """
+    import numpy as _np
+
+    # Build a grid of all pixel centres: shape (H*W, 2) as (x, y)
+    rows, cols = _np.mgrid[0:H, 0:W]
+    px = _np.stack([cols.ravel().astype(_np.float32),
+                    rows.ravel().astype(_np.float32)], axis=1)
+
+    n = len(hull_pts)
+    inside = _np.ones(len(px), dtype=bool)
+    for i in range(n):
+        ax, ay = hull_pts[i]
+        bx, by = hull_pts[(i + 1) % n]
+        # Cross product sign: (b-a) × (p-a) ≥ 0 for points on the left of edge a→b
+        cross = (bx - ax) * (px[:, 1] - ay) - (by - ay) * (px[:, 0] - ax)
+        inside &= (cross >= 0)
+
+    img = _np.zeros(H * W, dtype=_np.uint8)
+    img[inside] = 255
+    return img.reshape(H, W)
+
+
+def extract_floor_plan_bitmap(node: Any, canvas: int = 256, out: int = 64) -> "Any | None":
+    """
+    Extract the floor-plan bitmap for a 3ds Max room node.
+
+    Reads the mesh vertices in world space, isolates those at floor level
+    (bottom 5 % of room height), computes their 2-D convex hull, and
+    rasterises it to a binary bitmap using the same ATISS normalisation
+    as ``_load_one_room_boxes``:
+
+        shorter_dim  →  canvas pixels
+        longer_dim   →  canvas * (longer/shorter) pixels
+
+    The result is resized to ``out × out`` (default 64×64), ready to pass
+    directly to ``select_similar_examples_by_feature`` as *target_feature*.
+
+    Parameters
+    ----------
+    node   : pymxs room node (must be in the active 3ds Max scene)
+    canvas : intermediate rasterisation resolution (default 256)
+    out    : final square output size (default 64)
+
+    Returns
+    -------
+    (out × out) float32 numpy array, or ``None`` on any failure
+    (falls back gracefully so the caller can use ``_make_target_bitmap``).
+    """
+    try:
+        import pymxs as _pymxs
+        import numpy as _np
+    except ImportError:
+        return None
+
+    _rt = _pymxs.runtime
+
+    try:
+        # Snapshot gives a temporary Mesh object in object space.
+        # Multiplying each vertex by node.transform converts to world space.
+        mesh  = _rt.snapshotAsMesh(node)
+        tm    = node.transform
+        n_v   = int(_rt.getNumVerts(mesh))
+
+        verts: list[tuple[float, float, float]] = []
+        for i in range(1, n_v + 1):
+            v = _rt.getVert(mesh, i) * tm     # object → world space
+            verts.append((float(v.x), float(v.y), float(v.z)))
+        _rt.delete(mesh)                        # release temporary mesh
+
+        if len(verts) < 3:
+            print("[LayoutGPT] extract_floor_plan_bitmap: fewer than 3 vertices.")
+            return None
+
+        arr  = _np.array(verts, dtype=_np.float64)   # (N, 3): x, y, z
+        z_min, z_max = float(arr[:, 2].min()), float(arr[:, 2].max())
+        height = z_max - z_min
+        tol    = max(height * 0.05, 1.0)             # 5 % of room height or 1 unit
+
+        # Keep only floor-level vertices (max-coordinate system: X, Y = floor plane)
+        floor_mask   = arr[:, 2] <= (z_min + tol)
+        floor_pts_2d = arr[floor_mask, :2]            # (M, 2): x, y
+
+        if len(floor_pts_2d) < 3:
+            # Very thin mesh or single-face plane — use all vertices
+            floor_pts_2d = arr[:, :2]
+        if len(floor_pts_2d) < 3:
+            return None
+
+        x_min, y_min = float(floor_pts_2d[:, 0].min()), float(floor_pts_2d[:, 1].min())
+        x_max, y_max = float(floor_pts_2d[:, 0].max()), float(floor_pts_2d[:, 1].max())
+        room_length  = x_max - x_min                  # X extent
+        room_width   = y_max - y_min                  # Y extent
+
+        if room_length < 1e-4 or room_width < 1e-4:
+            return None
+
+        # ATISS normalisation (same as _load_one_room_boxes)
+        norm = min(room_length, room_width)
+        L = int(round(room_length / norm * canvas))    # cols
+        W = int(round(room_width  / norm * canvas))    # rows
+
+        # Map floor vertices to pixel coordinates
+        px_verts = _np.column_stack([
+            (floor_pts_2d[:, 0] - x_min) / norm * canvas,  # col ∈ [0, L]
+            (floor_pts_2d[:, 1] - y_min) / norm * canvas,  # row ∈ [0, W]
+        ])
+
+        hull = _convex_hull_2d(px_verts)
+        img  = _rasterize_convex_polygon(hull, H=W, W=L)
+
+        result = _resize_bitmap(img, out)
+        print(f"[LayoutGPT] extract_floor_plan_bitmap: "
+              f"room {room_length:.0f}×{room_width:.0f} units → "
+              f"{L}×{W}px canvas → {out}×{out}px feature  "
+              f"({int(floor_pts_2d.shape[0])} floor verts, "
+              f"{len(hull)} hull verts)")
+        return result
+
+    except Exception as exc:
+        print(f"[LayoutGPT] extract_floor_plan_bitmap failed: {exc}")
+        return None
+
+
 def _load_one_room_boxes(
     npz_path: str,
     stats: dict[str, Any],

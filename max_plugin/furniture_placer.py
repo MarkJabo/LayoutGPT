@@ -46,6 +46,7 @@ from layoutgpt_bridge.layoutgpt_runner import (
     load_train_examples,
     load_atiss_training_data,
     _make_target_bitmap,
+    extract_floor_plan_bitmap,
 )
 from layoutgpt_bridge.placement_engine import PlacementEngine, PlacementResult
 from layoutgpt_bridge.tag_mapper       import layoutgpt_room_key
@@ -306,8 +307,16 @@ def main(config: dict[str, Any]) -> str:
             train_examples, train_features = load_atiss_training_data(
                 data_dir, room_key, _splits_path)
             try:
-                target_feature = _make_target_bitmap(
-                    formatter.room_px_length, formatter.room_px_width)
+                # Prefer real geometry extraction — captures actual floor shape
+                # (L-shaped rooms, Polycam scans, etc.) for better k-similar.
+                # Falls back to the synthetic white-rectangle bitmap for rooms
+                # where the mesh cannot be read (e.g. non-mesh objects).
+                target_feature = extract_floor_plan_bitmap(room_info.spline_obj)
+                if target_feature is None:
+                    print("[FurniturePlacer] Floor-plan extraction unavailable; "
+                          "falling back to synthetic rectangle bitmap.")
+                    target_feature = _make_target_bitmap(
+                        formatter.room_px_length, formatter.room_px_width)
             except Exception as exc:
                 print(f"[FurniturePlacer] WARNING: could not compute target bitmap: {exc}")
                 target_feature = None
