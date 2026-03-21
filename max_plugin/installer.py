@@ -29,7 +29,7 @@ from typing import Optional
 # ---------------------------------------------------------------------------
 # Required pip packages
 # ---------------------------------------------------------------------------
-REQUIRED_PACKAGES: list[str] = ["openai"]
+REQUIRED_PACKAGES: list[str] = ["openai", "numpy"]
 
 # ---------------------------------------------------------------------------
 # Ollama constants

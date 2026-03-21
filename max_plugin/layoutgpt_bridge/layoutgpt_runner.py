@@ -490,6 +490,8 @@ class LayoutGPTRunner:
         asset_sizes: dict[str, dict[str, int]] | None = None,
         category_counts: dict[str, int] | None = None,
         train_examples: dict[str, dict] | None = None,
+        train_features: dict[str, Any] | None = None,
+        target_feature: Any = None,
     ) -> list[list[Placement]]:
         """
         Generate furniture placements for a room.
@@ -501,6 +503,9 @@ class LayoutGPTRunner:
         class_frequencies   : per-category frequency dict (from dataset_stats)
         few_shot_examples   : optional list of {condition, layout} dicts for ICL
         n_results           : number of independent layout variations to generate
+        train_examples      : dict of example rooms for k-similar retrieval
+        train_features      : dict of 64×64 floor plan arrays (ATISS data)
+        target_feature      : 64×64 array for the target room (ATISS path)
 
         Returns
         -------
@@ -517,15 +522,24 @@ class LayoutGPTRunner:
             category_counts=category_counts,
         )
         if few_shot_examples is None:
-            if train_examples:
+            if train_examples and train_features and target_feature is not None:
+                # Real ATISS data: use 64×64 floor-plan bitmap features
+                few_shot_examples = select_similar_examples_by_feature(
+                    train_examples, train_features, target_feature, k=8)
+                print(f"[LayoutGPTRunner] k-similar (floor plan bitmaps): "
+                      f"selected {len(few_shot_examples)} examples "
+                      f"for {formatter.room_px_length}×{formatter.room_px_width}px room")
+            elif train_examples:
+                # Fallback: dimension-based L2 (bundled JSON examples)
                 few_shot_examples = select_similar_examples(
                     train_examples,
                     formatter.room_px_length,
                     formatter.room_px_width,
                     k=4,
                 )
-                print(f"[LayoutGPTRunner] k-similar: selected {len(few_shot_examples)} "
-                      f"examples for {formatter.room_px_length}×{formatter.room_px_width}px room")
+                print(f"[LayoutGPTRunner] k-similar (dimensions): selected "
+                      f"{len(few_shot_examples)} examples "
+                      f"for {formatter.room_px_length}×{formatter.room_px_width}px room")
             if not few_shot_examples:
                 few_shot_examples = _default_few_shot_examples(formatter.room.room_type)
 
@@ -705,6 +719,210 @@ def filter_stats_to_available(
         for cat in filtered_types
     }
     return filtered_types, filtered_freq
+
+
+# ---------------------------------------------------------------------------
+# ATISS preprocessed data loader + floor-plan-image k-similar
+# Mirrors load_room_boxes / load_features / get_closest_room in run_layoutgpt_3d.py
+# ---------------------------------------------------------------------------
+
+def _resize_bitmap(arr: Any, size: int = 64) -> Any:
+    """
+    Nearest-neighbor resize of a 2-D (or 3-D with trailing 1) array to size×size.
+    Pure numpy — no PIL required.
+    """
+    import numpy as _np
+    arr = _np.asarray(arr, dtype=_np.float32)
+    if arr.ndim == 3:
+        arr = arr.squeeze(-1)
+    H, W = arr.shape
+    if H == size and W == size:
+        return arr
+    row_idx = _np.round(_np.linspace(0, H - 1, size)).astype(_np.int32)
+    col_idx = _np.round(_np.linspace(0, W - 1, size)).astype(_np.int32)
+    return arr[_np.ix_(row_idx, col_idx)]
+
+
+def _make_target_bitmap(length_px: int, width_px: int,
+                        canvas: int = 256, out: int = 64) -> Any:
+    """
+    Synthetic 64×64 floor-plan bitmap for a rectangular 3ds Max room.
+
+    Mirrors the room_layout field produced by ATISS preprocessing for
+    axis-aligned rectangular rooms.  The shorter room dimension maps to
+    'canvas' pixels; the longer dimension scales proportionally (capped at
+    canvas).  The result is then resized to out×out.
+    """
+    import numpy as _np
+    norm = min(length_px, width_px)
+    L = min(int(round(length_px / norm * canvas)), canvas)
+    W = min(int(round(width_px  / norm * canvas)), canvas)
+    arr = _np.zeros((canvas, canvas), dtype=_np.uint8)
+    arr[:W, :L] = 255
+    return _resize_bitmap(arr, out)
+
+
+def _load_one_room_boxes(
+    npz_path: str,
+    stats: dict[str, Any],
+    room_type: str,
+    normalize: bool = True,
+    scale: int = 256,
+) -> "tuple[str, str, Any]":
+    """
+    Load one ATISS boxes.npz file and convert it to (condition, layout, feature).
+
+    Mirrors load_room_boxes() in run_layoutgpt_3d.py exactly:
+      --normalize --unit px --regular_floor_plan
+
+    Returns:
+        condition  : "Condition:\\n..." string
+        layout     : CSS-style furniture layout string
+        feature    : 64×64 float32 numpy array (floor plan bitmap)
+
+    Raises on corrupt / missing npz.
+    """
+    import numpy as _np
+
+    data = _np.load(npz_path, allow_pickle=False)
+    verts    = data["floor_plan_vertices"]          # (N, 3)
+    centroid = data["floor_plan_centroid"]           # (3,)
+    x_c, y_c = float(centroid[0]), float(centroid[2])
+    x_offset = float(verts[:, 0].min())
+    y_offset = float(verts[:, 2].min())
+    room_length = float(verts[:, 0].max()) - x_offset
+    room_width  = float(verts[:, 2].max()) - y_offset
+
+    norm = min(room_length, room_width) if normalize else 1.0
+    length_px = int(room_length / norm * scale)
+    width_px  = int(room_width  / norm * scale)
+
+    condition = (
+        f"Condition:\n"
+        f"Room Type: {room_type}\n"
+        f"Room Size: max length {length_px}px, max width {width_px}px\n"
+    )
+
+    layout = ""
+    obj_types = stats["object_types"]
+    for label, size, angle, loc in zip(
+        data["class_labels"], data["sizes"], data["angles"], data["translations"]
+    ):
+        idx = int(_np.argmax(label))
+        if idx >= len(obj_types):
+            continue
+        cat = obj_types[idx]
+        l_half, h_half, w_half = float(size[0]), float(size[1]), float(size[2])
+        l, h, w = l_half * 2, h_half * 2, w_half * 2
+        orientation = round(float(angle[0]) / _math.pi * 180)
+        dx, dz, dy = float(loc[0]), float(loc[1]), float(loc[2])
+        dx = dx + x_c - x_offset
+        dy = dy + y_c - y_offset
+        if normalize:
+            l  = int(l  / norm * scale)
+            h  = int(h  / norm * scale)
+            w  = int(w  / norm * scale)
+            dx = int(dx / norm * scale)
+            dy = int(dy / norm * scale)
+            dz = int(dz / norm * scale)
+        layout += (
+            f"{cat} {{length: {l}px; width: {w}px; height: {h}px; "
+            f"left: {dx}px; top: {dy}px; depth: {dz}px; "
+            f"orientation: {orientation} degrees;}}\n"
+        )
+
+    feature = _resize_bitmap(data["room_layout"], 64)
+    return condition, layout, feature
+
+
+def load_atiss_training_data(
+    data_dir: str,
+    room_type: str,
+    splits_json_path: str | None = None,
+) -> "tuple[dict[str, dict], dict[str, Any]]":
+    """
+    Load all ATISS-preprocessed training rooms for k-similar ICL retrieval.
+
+    Scans data_dir/room_type/ for subdirectories containing boxes.npz.
+    If splits_json_path points to a bedroom/livingroom splits JSON (from
+    dataset/3D/), only rooms in the rect_train split are loaded; otherwise
+    all rooms with boxes.npz are loaded.
+
+    Returns:
+        examples : dict[room_id → {condition, layout}]
+        features : dict[room_id → 64×64 float32 numpy array]
+
+    Returns ({}, {}) if numpy is unavailable or no boxes.npz files are found.
+    """
+    try:
+        import numpy as _np  # noqa: F401  (just to confirm availability)
+    except ImportError:
+        print("[LayoutGPTRunner] numpy not available – ATISS loading skipped.")
+        return {}, {}
+
+    stats = load_dataset_stats(data_dir, room_type)
+    room_dir = os.path.join(data_dir, room_type)
+    if not os.path.isdir(room_dir):
+        return {}, {}
+
+    # Filter to rect_train split if splits file is provided
+    allowed_ids: "set[str] | None" = None
+    if splits_json_path and os.path.exists(splits_json_path):
+        with open(splits_json_path, "r") as fh:
+            splits = json.load(fh)
+        allowed_ids = set(splits.get("rect_train") or splits.get("train", []))
+
+    all_ids = [
+        d for d in os.listdir(room_dir)
+        if os.path.isdir(os.path.join(room_dir, d))
+        and os.path.exists(os.path.join(room_dir, d, "boxes.npz"))
+        and (allowed_ids is None or d in allowed_ids)
+    ]
+
+    print(f"[LayoutGPTRunner] Loading {len(all_ids)} ATISS rooms "
+          f"({room_type}) from {room_dir} …")
+
+    examples: dict[str, dict] = {}
+    features: dict[str, Any]  = {}
+    errors = 0
+    for room_id in all_ids:
+        npz_path = os.path.join(room_dir, room_id, "boxes.npz")
+        try:
+            cond, layout, feat = _load_one_room_boxes(npz_path, stats, room_type)
+            if layout.strip():                       # skip empty rooms
+                examples[room_id] = {"condition": cond, "layout": layout}
+                features[room_id] = feat
+        except Exception:
+            errors += 1
+
+    print(f"[LayoutGPTRunner] ATISS load complete: "
+          f"{len(examples)} valid rooms, {errors} skipped.")
+    return examples, features
+
+
+def select_similar_examples_by_feature(
+    examples: dict[str, dict],
+    features: dict[str, Any],
+    target_feature: Any,
+    k: int = 8,
+) -> list[dict]:
+    """
+    Floor-plan-image k-similar retrieval using L2 distance on 64×64 bitmaps.
+
+    Exactly mirrors get_closest_room() in run_layoutgpt_3d.py with
+    load_features(..., floor_plan=True).
+    """
+    import numpy as _np
+    target_flat = _np.asarray(target_feature, dtype=_np.float32).flatten()
+    scored: list[tuple[float, dict]] = []
+    for room_id, feat in features.items():
+        if room_id not in examples:
+            continue
+        diff = _np.asarray(feat, dtype=_np.float32).flatten() - target_flat
+        dist = float((diff * diff).mean())
+        scored.append((dist, examples[room_id]))
+    scored.sort(key=lambda x: x[0])
+    return [ex for _, ex in scored[:k]]
 
 
 # ---------------------------------------------------------------------------

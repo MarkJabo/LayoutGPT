@@ -44,6 +44,8 @@ from layoutgpt_bridge.layoutgpt_runner import (
     load_dataset_stats,
     filter_stats_to_available,
     load_train_examples,
+    load_atiss_training_data,
+    _make_target_bitmap,
 )
 from layoutgpt_bridge.placement_engine import PlacementEngine, PlacementResult
 from layoutgpt_bridge.tag_mapper       import layoutgpt_room_key
@@ -53,6 +55,10 @@ from layoutgpt_bridge.tag_mapper       import layoutgpt_room_key
 # ---------------------------------------------------------------------------
 # Default data directory: bundled alongside this file in max_plugin/data/
 _DEFAULT_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+
+# Splits JSON files (bedroom_splits.json / livingroom_splits.json) from the
+# LayoutGPT repo root — used to restrict ATISS loading to rect_train rooms.
+_SPLITS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "dataset", "3D")
 
 BACKEND_URLS: dict[str, str | None] = {
     "ollama"  : "http://localhost:11434/v1",
@@ -247,11 +253,39 @@ def main(config: dict[str, Any]) -> str:
         else:
             class_freq = _flat_frequencies(available_cats)
 
-        # Load train examples for k-similar in-context example retrieval
-        train_examples = load_train_examples(data_dir, room_key)
-        if train_examples:
-            print(f"[FurniturePlacer] Loaded {len(train_examples)} train examples "
-                  f"for k-similar retrieval ({room_key})")
+        # Detect whether dataset_dir contains real ATISS preprocessed data
+        # (any subdirectory with a boxes.npz file) or only bundled JSON examples.
+        _room_data_dir = os.path.join(data_dir, room_key)
+        _has_atiss = False
+        if os.path.isdir(_room_data_dir):
+            for _d in os.listdir(_room_data_dir):
+                if (os.path.isdir(os.path.join(_room_data_dir, _d)) and
+                        os.path.exists(os.path.join(_room_data_dir, _d, "boxes.npz"))):
+                    _has_atiss = True
+                    break
+
+        if _has_atiss:
+            # Real ATISS data: load all training rooms + 64×64 floor plan features
+            _splits_path = os.path.join(_SPLITS_DIR, f"{room_key}_splits.json")
+            train_examples, train_features = load_atiss_training_data(
+                data_dir, room_key, _splits_path)
+            try:
+                target_feature = _make_target_bitmap(
+                    formatter.room_px_length, formatter.room_px_width)
+            except Exception as exc:
+                print(f"[FurniturePlacer] WARNING: could not compute target bitmap: {exc}")
+                target_feature = None
+            if train_examples:
+                print(f"[FurniturePlacer] Using real ATISS data: "
+                      f"{len(train_examples)} rooms loaded ({room_key})")
+        else:
+            # Bundled JSON fallback
+            train_examples = load_train_examples(data_dir, room_key)
+            train_features = None
+            target_feature = None
+            if train_examples:
+                print(f"[FurniturePlacer] Loaded {len(train_examples)} bundled train examples "
+                      f"for k-similar retrieval ({room_key})")
 
         # Measure actual asset footprints and pass to LLM so it can reason
         # about real sizes rather than guessing from category statistics.
@@ -282,6 +316,8 @@ def main(config: dict[str, Any]) -> str:
                 asset_sizes          = asset_px_sizes,
                 category_counts      = category_counts,
                 train_examples       = train_examples,
+                train_features       = train_features,
+                target_feature       = target_feature,
             )
         except Exception as exc:
             all_results.append(f"ERROR {room_entry.node_name}: LLM call failed – {exc}")
