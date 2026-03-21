@@ -192,38 +192,57 @@ def _snap_nightstands_to_bed(
     """
     Deterministically move nightstands to be immediately adjacent to the bed.
 
-    The LLM consistently places nightstands a few pixels too close (overlapping
-    the bed) because it can't do half-dimension arithmetic reliably. This snaps
-    them to the mathematically correct touching position.
-
-    - nightstand_1 goes to the LEFT side of the bed
-    - nightstand_2 goes to the RIGHT side of the bed
-    - positions are clamped to room bounds; if a side doesn't fit, it stays put
+    Uses the bed's actual orientation to determine which axis is the "side"
+    axis (the one nightstands belong beside).  For a 0°/180° bed the side
+    axis is left/right (X); for a 90°/270° bed it is top/bottom (Y).
 
     After mutating p.px, p.scene is recomputed so the placement engine sees
-    the corrected world coordinates (scene is computed at parse time and must
-    be kept in sync with any post-parse px mutations).
+    the corrected world coordinates.
     """
     bed = next((p for p in placements if p.category in _BED_CATEGORIES), None)
     nightstands = [p for p in placements if p.category in _NS_CATEGORIES]
     if bed is None or not nightstands:
         return placements
 
-    bed_cx   = bed.px["left"]
-    bed_cy   = bed.px["top"]
-    bed_half = bed.px["length"] / 2.0
+    bed_cx  = bed.px["left"]
+    bed_cy  = bed.px["top"]
+    bed_ori = bed.px.get("orientation", 0.0) % 180  # treat 0 == 180, 90 == 270
 
-    sides = [("left", -1), ("right", +1)]
-    for ns, (side, sign) in zip(nightstands, sides):
-        ns_half = ns.px["length"] / 2.0
-        new_cx  = bed_cx + sign * (bed_half + ns_half)
-        # Clamp to room bounds
-        lo = ns_half
-        hi = room_length_px - ns_half
-        if lo <= new_cx <= hi:
-            ns.px["left"] = new_cx
-            ns.px["top"]  = bed_cy
-            ns.scene = formatter.from_px(ns.px)  # keep scene in sync with px
+    # Which dimension of the bed spans the "side" axis?
+    # At 0°:  length is along X → nightstands go left/right.
+    # At 90°: length is along Y → nightstands go above/below.
+    if abs(bed_ori) < 45 or abs(bed_ori - 180) < 45:
+        # Near-0° or near-180°: side axis = X (left/right)
+        bed_half = bed.px["length"] / 2.0
+        sides = [(-1, 0), (+1, 0)]   # (dx_sign, dy_sign)
+        ns_half_key = "length"
+        clamp_lo, clamp_hi = room_length_px, room_width_px
+    else:
+        # Near-90° or near-270°: side axis = Y (top/bottom)
+        bed_half = bed.px["width"] / 2.0
+        sides = [(0, -1), (0, +1)]
+        ns_half_key = "width"
+        clamp_lo, clamp_hi = room_length_px, room_width_px
+
+    for ns, (dx_sign, dy_sign) in zip(nightstands, sides):
+        ns_half = ns.px[ns_half_key] / 2.0
+        gap = 1.0  # 1px breathing room so they don't share floor area
+        if dx_sign != 0:
+            new_cx = bed_cx + dx_sign * (bed_half + ns_half + gap)
+            new_cy = bed_cy
+            lo, hi = ns_half, room_length_px - ns_half
+            if lo <= new_cx <= hi:
+                ns.px["left"] = new_cx
+                ns.px["top"]  = new_cy
+                ns.scene = formatter.from_px(ns.px)
+        else:
+            new_cx = bed_cx
+            new_cy = bed_cy + dy_sign * (bed_half + ns_half + gap)
+            lo, hi = ns_half, room_width_px - ns_half
+            if lo <= new_cy <= hi:
+                ns.px["left"] = new_cx
+                ns.px["top"]  = new_cy
+                ns.scene = formatter.from_px(ns.px)
     return placements
 
 
@@ -607,7 +626,13 @@ class LayoutGPTRunner:
 
             results: list[list[Placement]] = []
             for content in raw_content:
-                placements = self._parse_response(content, formatter)
+                placements = self._parse_response(content, formatter, asset_sizes)
+                placements = _snap_nightstands_to_bed(
+                    placements,
+                    formatter.room_px_length,
+                    formatter.room_px_width,
+                    formatter,
+                )
                 results.append(placements)
 
             # Check the first result for overlaps in pixel space; retry if found.
@@ -667,7 +692,12 @@ class LayoutGPTRunner:
     # Response parser
     # ------------------------------------------------------------------
 
-    def _parse_response(self, content: str, formatter: RoomFormatter) -> list[Placement]:
+    def _parse_response(
+        self,
+        content: str,
+        formatter: RoomFormatter,
+        asset_px_sizes: dict[str, dict[str, int]] | None = None,
+    ) -> list[Placement]:
         print(f"[LayoutGPTRunner] Raw LLM response:\n{content}")
         # Collapse multi-line CSS blocks into single lines so the parser handles
         # both "FURNITURE {field: val; ...}" (paper format) and the multi-line
@@ -685,6 +715,19 @@ class LayoutGPTRunner:
             category, px_placement = _parse_3d_line(line, unit=_UNIT)
             if category is None:
                 continue
+
+            # Replace LLM-specified dimensions with actual measured asset
+            # dimensions.  LLMs reliably get centers (left/top) right but
+            # consistently swap length↔width (putting the larger value first
+            # regardless of which axis it belongs to).  Using real dimensions
+            # ensures wall-clamping, overlap detection, and the nightstand-snap
+            # all work against the true footprint of the asset in 3ds Max.
+            if asset_px_sizes and category in asset_px_sizes:
+                adims = asset_px_sizes[category]
+                px_placement["length"] = float(adims["length"])
+                px_placement["width"]  = float(adims["width"])
+                px_placement["height"] = float(adims["height"])
+
             try:
                 scene_placement = formatter.from_px(px_placement)
             except (KeyError, TypeError, ValueError):
