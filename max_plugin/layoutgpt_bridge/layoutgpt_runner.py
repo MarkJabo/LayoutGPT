@@ -340,11 +340,30 @@ def _build_system_prompt(
     room_type: str = "bedroom",
     category_counts: dict[str, int] | None = None,
 ) -> str:
-    # Mirrors form_prompt_for_chatgpt() in run_layoutgpt_3d.py exactly.
     freq_str = "; ".join(
         f"{obj}: {round(class_freq.get(obj, 0.0), 4)}" for obj in available_furniture
     )
+
+    # Asset size block: tell the LLM the measured real dimensions so it doesn't
+    # invent them.  The original paper derived sizes from the 3D-FUTURE dataset;
+    # here we measure from the actual Max scene assets.
+    if asset_sizes:
+        size_lines = "\n".join(
+            f"  {cat}: length={asset_sizes[cat]['length']}px, "
+            f"width={asset_sizes[cat]['width']}px, "
+            f"height={asset_sizes[cat]['height']}px"
+            for cat in available_furniture
+            if cat in asset_sizes
+        )
+        size_block = (
+            f"Asset sizes (use these exact values for length/width/height):\n"
+            f"{size_lines}\n\n"
+        )
+    else:
+        size_block = ""
+
     return (
+        # --- Identical to the paper's ChatGPT system prompt (form_prompt_for_chatgpt) ---
         "You are a 3D indoor scene designer.\n"
         "Instruction: synthesize the 3D layout of an indoor scene. "
         "The generated 3D layout should follow the CSS style, where each line starts "
@@ -352,10 +371,18 @@ def _build_system_prompt(
         "absolute position. "
         "Formally, each line should follow the template:\n"
         f"FURNITURE {{length: ?{_UNIT}; width: ?{_UNIT}; height: ?{_UNIT}; "
-        f"orientation: ? degrees; left: ?{_UNIT}; top: ?{_UNIT}; depth: ?{_UNIT};}}\n"
+        f"left: ?{_UNIT}; top: ?{_UNIT}; depth: ?{_UNIT}; orientation: ? degrees;}}\n"
         f"All values are in {_UNIT_NAME} but the orientation angle is in degrees.\n\n"
+        # --- Coordinate convention ---
+        "Note: left and top are the CENTRE of the item's floor footprint. "
+        "depth = 0 for all floor-standing furniture.\n\n"
+        # --- Asset sizes (replaces the paper's dataset-statistics-derived sizes) ---
+        f"{size_block}"
+        # --- Category list and frequencies (verbatim from the paper) ---
         f"Available furnitures: {', '.join(available_furniture)}\n"
         f"Overall furniture frequencies: ({freq_str})\n\n"
+        # --- Required items (needed because we have no k-similar retrieval) ---
+        + _required_items_block(available_furniture, category_counts)
     )
 
 
@@ -503,6 +530,8 @@ class LayoutGPTRunner:
         class_frequencies: dict[str, float],
         few_shot_examples: list[dict] | None = None,
         n_results: int = 1,
+        asset_sizes: dict[str, dict[str, int]] | None = None,
+        category_counts: dict[str, int] | None = None,
         train_examples: dict[str, dict] | None = None,
         train_features: dict[str, Any] | None = None,
         target_feature: Any = None,
@@ -518,8 +547,8 @@ class LayoutGPTRunner:
         few_shot_examples   : optional list of {condition, layout} dicts for ICL
         n_results           : number of independent layout variations to generate
         train_examples      : dict of example rooms for k-similar retrieval
-        train_features      : dict of 64×64 floor plan bitmaps (ATISS data)
-        target_feature      : 64×64 bitmap for the target room (ATISS path)
+        train_features      : dict of 64×64 floor plan arrays (ATISS data)
+        target_feature      : 64×64 array for the target room (ATISS path)
 
         Returns
         -------
@@ -529,9 +558,11 @@ class LayoutGPTRunner:
         # (bed, sofa) before accessories (chairs, lamps, side-tables).
         ordered_cats = _sort_by_priority(available_categories, formatter.room.room_type)
         print(f"[LayoutGPTRunner] Available categories (ordered): {ordered_cats}")
+        print(f"[LayoutGPTRunner] Category counts: {category_counts}")
         system_msg = _build_system_prompt(
-            ordered_cats, class_frequencies,
+            ordered_cats, class_frequencies, asset_sizes,
             room_type=formatter.room.room_type,
+            category_counts=category_counts,
         )
         if few_shot_examples is None:
             if train_examples and train_features and target_feature is not None:
