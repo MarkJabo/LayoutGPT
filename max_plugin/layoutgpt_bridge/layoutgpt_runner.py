@@ -352,10 +352,16 @@ class LayoutGPTRunner:
         if few_shot_examples is None:
             if train_examples and train_features and target_feature is not None:
                 few_shot_examples = select_similar_examples_by_feature(
-                    train_examples, train_features, target_feature, k=8)
-                print(f"[LayoutGPTRunner] k-similar (floor plan): "
+                    train_examples, train_features, target_feature, k=8,
+                    target_length_px=formatter.room_px_length,
+                    target_width_px=formatter.room_px_width,
+                )
+                print(f"[LayoutGPTRunner] k-similar (floor plan + dims): "
                       f"selected {len(few_shot_examples)} examples "
                       f"for {formatter.room_px_length}×{formatter.room_px_width}px room")
+                for i, ex in enumerate(few_shot_examples):
+                    cond_first_line = ex.get("condition", "").strip().split("\n")[-1]
+                    print(f"  [{i+1}] {cond_first_line}")
             elif train_examples:
                 few_shot_examples = select_similar_examples(
                     train_examples,
@@ -731,22 +737,43 @@ def select_similar_examples_by_feature(
     features: dict[str, Any],
     target_feature: Any,
     k: int = 8,
+    target_length_px: int | None = None,
+    target_width_px: int | None = None,
 ) -> list[dict]:
     """
-    Floor-plan-image k-similar retrieval using L2 distance on 64×64 bitmaps.
+    Floor-plan-image k-similar retrieval using L2 distance on 64×64 bitmaps,
+    with room-dimension L2 as a tiebreaker.
 
     Exactly mirrors get_closest_room() in run_layoutgpt_3d.py with
     load_features(..., floor_plan=True).
+
+    For rectangular Max rooms the synthetic target bitmap (solid white) can
+    produce equal bitmap distances for all rectangular ATISS rooms.  Providing
+    target_length_px / target_width_px breaks those ties so that the 8 closest
+    rooms are also the most similar in size, giving the LLM better context.
     """
     import numpy as _np
+    import re as _re
     target_flat = _np.asarray(target_feature, dtype=_np.float32).flatten()
-    scored: list[tuple[float, dict]] = []
+    scored: list[tuple[tuple[float, float], dict]] = []
     for room_id, feat in features.items():
         if room_id not in examples:
             continue
         diff = _np.asarray(feat, dtype=_np.float32).flatten() - target_flat
-        dist = float((diff * diff).mean())
-        scored.append((dist, examples[room_id]))
+        bitmap_dist = float((diff * diff).mean())
+
+        # Dimension tiebreaker (normalised to same order-of-magnitude as bitmap MSE)
+        dim_dist = 0.0
+        if target_length_px and target_width_px:
+            cond = examples[room_id].get("condition", "")
+            m_l = _re.search(r"max length (\d+)px", cond)
+            m_w = _re.search(r"max width (\d+)px", cond)
+            if m_l and m_w:
+                dl = int(m_l.group(1)) - target_length_px
+                dw = int(m_w.group(1)) - target_width_px
+                dim_dist = float(dl * dl + dw * dw)
+
+        scored.append(((bitmap_dist, dim_dist), examples[room_id]))
     scored.sort(key=lambda x: x[0])
     return [ex for _, ex in scored[:k]]
 

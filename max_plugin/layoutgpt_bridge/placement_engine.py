@@ -300,8 +300,9 @@ class PlacementEngine:
 
                 placed_nodes.append(inst)
                 result.placed.append(inst_name)
+                final_pos = inst.pos
                 print(f"[PlacementEngine] Placed {inst_name} at "
-                      f"({pl.scene['pos_x']:.1f}, {pl.scene['pos_y']:.1f}, {pl.scene['pos_z']:.1f}) "
+                      f"({float(final_pos.x):.1f}, {float(final_pos.y):.1f}, {float(final_pos.z):.1f}) "
                       f"rot={pl.scene['rotation_deg']:.1f}°")
             except Exception as exc:
                 print(f"[PlacementEngine] ERROR placing {inst_name}: {exc}")
