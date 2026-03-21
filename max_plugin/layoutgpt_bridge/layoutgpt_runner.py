@@ -187,6 +187,7 @@ def _snap_nightstands_to_bed(
     placements: list["Placement"],
     room_length_px: int,
     room_width_px: int,
+    formatter: "RoomFormatter",
 ) -> list["Placement"]:
     """
     Deterministically move nightstands to be immediately adjacent to the bed.
@@ -198,6 +199,10 @@ def _snap_nightstands_to_bed(
     - nightstand_1 goes to the LEFT side of the bed
     - nightstand_2 goes to the RIGHT side of the bed
     - positions are clamped to room bounds; if a side doesn't fit, it stays put
+
+    After mutating p.px, p.scene is recomputed so the placement engine sees
+    the corrected world coordinates (scene is computed at parse time and must
+    be kept in sync with any post-parse px mutations).
     """
     bed = next((p for p in placements if p.category in _BED_CATEGORIES), None)
     nightstands = [p for p in placements if p.category in _NS_CATEGORIES]
@@ -218,6 +223,7 @@ def _snap_nightstands_to_bed(
         if lo <= new_cx <= hi:
             ns.px["left"] = new_cx
             ns.px["top"]  = bed_cy
+            ns.scene = formatter.from_px(ns.px)  # keep scene in sync with px
     return placements
 
 
@@ -628,7 +634,8 @@ class LayoutGPTRunner:
         # strip any remaining overlaps from the final layout.
         if results:
             _snap_nightstands_to_bed(
-                results[0], formatter.room_px_length, formatter.room_px_width)
+                results[0], formatter.room_px_length, formatter.room_px_width,
+                formatter)
         results = [_remove_overlapping_placements(pl) for pl in results]
 
         return results

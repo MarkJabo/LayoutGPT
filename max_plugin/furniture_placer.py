@@ -253,6 +253,42 @@ def main(config: dict[str, Any]) -> str:
         else:
             class_freq = _flat_frequencies(available_cats)
 
+        # Warn the user if any selected categories are rare for this room type.
+        # Low-frequency items (<10% of training rooms) degrade LLM quality because
+        # the few-shot examples almost never include them — the model improvises.
+        if stats:
+            _RARE_THRESHOLD = 0.10
+            raw_freq = stats.get("class_frequencies", {})
+            rare = [
+                (cat, raw_freq.get(cat, 0.0))
+                for cat in library.keys()
+                if raw_freq.get(cat, 0.0) < _RARE_THRESHOLD
+            ]
+            if rare:
+                rare_lines = "\n".join(
+                    f"  {c}  ({f:.0%} of {room_key} training rooms)" for c, f in rare
+                )
+                warn_msg = (
+                    f"The following categories are rare in {room_key} scenes "
+                    f"and may produce poor layout results:\n\n"
+                    + rare_lines
+                    + "\n\nThe model has little training data for these placements. "
+                    "Proceed anyway?"
+                )
+                proceed = True
+                try:
+                    import pymxs
+                    proceed = bool(pymxs.runtime.queryBox(warn_msg, title="Category Warning"))
+                except Exception:
+                    # pymxs unavailable (e.g. running outside Max) – log and continue
+                    print(f"[FurniturePlacer] Category warning (auto-proceeding): {rare}")
+                if not proceed:
+                    all_results.append(
+                        f"[{room_entry.node_name}] Cancelled: rare categories for {room_key}: "
+                        + ", ".join(c for c, _ in rare)
+                    )
+                    continue
+
         # Detect whether dataset_dir contains real ATISS preprocessed data
         # (any subdirectory with a boxes.npz file) or only bundled JSON examples.
         _room_data_dir = os.path.join(data_dir, room_key)
