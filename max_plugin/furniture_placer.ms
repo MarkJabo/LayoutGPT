@@ -12,11 +12,13 @@ Python dependencies install automatically the first time.
 
 WORKFLOW
 --------
-  1.  SETUP panel   – choose Local (Ollama) or Cloud (OpenAI / Custom).
-  2.  ROOMS panel   – select a closed spline → click "Add Selected Room".
+  1.  SETUP panel     – choose Local (Ollama) or Cloud (OpenAI / Custom).
+  2.  ROOMS panel     – select a closed spline → click "Set Selected Room".
+                        The room type determines which furniture is highlighted.
   3.  FURNITURE panel – select furniture objects → click "Add Selected".
-                        Click a list item to edit its category, room, or copies.
-  4.  GENERATE panel – click "Generate Furniture Layout".
+                        Items greyed out have no training data for the active room type.
+                        Click a list item to edit its category or copies.
+  4.  GENERATE panel  – click "Generate Furniture Layout".
 */
 
 -------------------------------------------------------------------------------
@@ -57,16 +59,79 @@ fn fp_MigrateFurniture = (
 )
 fp_MigrateFurniture()
 
--- All LayoutGPT categories for the category dropdown
+-- All LayoutGPT categories (canonical 3D-FUTURE names)
 global gFP_AllCats
 gFP_AllCats = #(
-    "armchair","cabinet","ceiling_lamp","chair","children_cabinet",
+    "armchair","bookshelf","cabinet","ceiling_lamp","chair","children_cabinet",
     "coffee_table","console_table","corner_side_table","desk",
     "dining_chair","dining_table","double_bed","dresser","dressing_chair",
     "dressing_table","floor_lamp","kids_bed","l_shaped_sofa","lounge_chair",
     "loveseat_sofa","multi_seat_sofa","nightstand","pendant_lamp",
     "round_end_table","shelf","single_bed","stool","table","tv_stand",
     "wardrobe","wine_cabinet"
+)
+
+-- Per-room category sets (sourced from bundled dataset_stats.txt)
+-- Used to grey-out furniture in the list that has no training data for the
+-- selected room type, and to filter the category dropdown.
+global gFP_BedroomCats
+gFP_BedroomCats = #(
+    "double_bed","single_bed","kids_bed","nightstand","wardrobe",
+    "dresser","cabinet","shelf","bookshelf","children_cabinet",
+    "dressing_table","desk","chair","dressing_chair","stool",
+    "armchair","tv_stand","ceiling_lamp","floor_lamp","pendant_lamp",
+    "corner_side_table"
+)
+
+global gFP_LivingCats
+gFP_LivingCats = #(
+    "multi_seat_sofa","l_shaped_sofa","loveseat_sofa","armchair","lounge_chair",
+    "coffee_table","console_table","corner_side_table","round_end_table",
+    "dining_table","dining_chair","tv_stand","cabinet","shelf","bookshelf",
+    "wine_cabinet","stool","ceiling_lamp","floor_lamp","pendant_lamp"
+)
+
+-- Return the room type of the single active room ("" if none).
+fn fp_CurrentRoomType = (
+    if gFP_Rooms.count > 0 then gFP_Rooms[1].roomType else ""
+)
+
+-- Return true if *cat* appears in the training data for *roomType*.
+fn fp_CatForRoom cat roomType = (
+    local cats = if roomType == "bedroom" then gFP_BedroomCats \
+                 else if roomType == "livingroom" then gFP_LivingCats \
+                 else gFP_AllCats
+    local found = false
+    for c in cats where c == cat do found = true
+    found
+)
+
+-- Return the appropriate category list for the current room type.
+-- If a dataset_dir is configured and its dataset_stats.txt can be read,
+-- that list is used instead so it adapts to custom training data.
+fn fp_CatsForCurrentRoom = (
+    local roomType = fp_CurrentRoomType()
+    -- Try loading from dataset_stats if dataset_dir is configured
+    if gFP_DatasetDir != "" and roomType != "" do (
+        local code = (
+            "import sys, os, json\n" +
+            "sys.path.insert(0, '" + fp_PyPath() + "')\n" +
+            "stats_path = os.path.join(r'" + gFP_DatasetDir + "', '" + roomType + "', 'dataset_stats.txt')\n" +
+            "try:\n" +
+            "    with open(stats_path) as f: s = json.load(f)\n" +
+            "    print(','.join(s['object_types']))\n" +
+            "except: print('')\n"
+        )
+        local result = fp_PyRun code default:""
+        if result != "" do (
+            local loaded = filterString result ","
+            if loaded.count > 0 do return loaded
+        )
+    )
+    -- Fallback to hardcoded sets
+    if roomType == "bedroom" then gFP_BedroomCats
+    else if roomType == "livingroom" then gFP_LivingCats
+    else gFP_AllCats
 )
 
 -- Python initialisation  (auto-installs openai package if missing) ------
@@ -103,27 +168,6 @@ fn fp_PyRun code default:"" = (
     result
 )
 
-fn fp_RefreshRoomList lb = (
-    local items = #()
-    for r in gFP_Rooms do append items ("[" + r.roomType + "]  " + r.nodeName)
-    lb.items = items
-)
-
-fn fp_RefreshFurnList lb = (
-    local items = #()
-    for f in gFP_Furniture do (
-        local dupe = if f.maxCopies > 1 then ("  x" + f.maxCopies as string) else ""
-        local rm   = if f.roomAssign != "all" then ("  [" + f.roomAssign + "]") else ""
-        append items (f.category + dupe + "  —  " + f.nodeName + rm)
-    )
-    lb.items = items
-)
-
-fn fp_RoomNames = (
-    local names = #("All Rooms")
-    for r in gFP_Rooms do append names r.nodeName
-    names
-)
 
 -- Serialize registry to JSON for Python  --------------------------------
 fn fp_RegistryJSON = (
@@ -251,89 +295,76 @@ rollout ro_Setup "1 · LLM Setup" width:420
 )
 
 -------------------------------------------------------------------------------
--- ROLLOUT 2 – Rooms
+-- ROLLOUT 2 – Rooms  (single room at a time)
 -------------------------------------------------------------------------------
 rollout ro_Rooms "2 · Room Boundaries" width:420
 (
-    label lbl_hint "Select a closed spline in the viewport, then click Add." align:#left
+    label lbl_hint "Select a closed spline in the viewport, then click Set Room." align:#left
 
-    listbox lb_rooms ""  height:5 width:395 align:#center
-    button  btn_addRoom  "Add Selected Room"  width:185 align:#left  across:3
-    button  btn_remRoom  "Remove"             width:90  align:#center
-    button  btn_clrRoom  "Clear All"          width:90  align:#right
-
-    group "Selected Room"
+    group "Active Room"
     (
-        label           lbl_rName  "—" align:#left
-        label           lbl_rType  "Room type:" align:#left
-        dropdownlist    ddl_rType  items:#("bedroom","livingroom") selection:1 width:160 align:#left
+        label       lbl_rName   "No room selected." align:#left
+        label       lbl_rType   "Room type:" align:#left
+        dropdownlist ddl_rType  items:#("bedroom","livingroom") selection:1 width:160 align:#left
+        button      btn_setRoom "Set Selected Room"  width:185 align:#left across:2
+        button      btn_clrRoom "Clear Room"          width:185 align:#right
     )
 
     -- helpers
     fn _roomTypeIdx t = (
         if t == "bedroom" then 1 else 2
     )
-    fn _updateDetail = (
-        local sel = lb_rooms.selection
-        if sel == 0 or sel > gFP_Rooms.count do (
-            lbl_rName.text = "—"
+
+    fn _updateRoomDisplay = (
+        if gFP_Rooms.count == 0 do (
+            lbl_rName.text = "No room selected."
             return()
         )
-        local r = gFP_Rooms[sel]
-        lbl_rName.text  = r.nodeName
+        local r = gFP_Rooms[1]
+        lbl_rName.text = r.nodeName
         ddl_rType.selection = _roomTypeIdx r.roomType
     )
 
+    -- Refresh the furniture list colours when room type changes.
+    -- The try/catch handles the case where ro_Furniture isn't open yet.
+    fn _notifyFurnList = (
+        try ( ro_Furniture._refreshFurnColors() ) catch ()
+    )
+
     on ro_Rooms open do (
-        fp_RefreshRoomList lb_rooms
-        _updateDetail()
+        _updateRoomDisplay()
     )
 
-    on btn_addRoom pressed do (
-        local added = 0
-        for obj in selection do (
-            -- Auto-detect room type from name; default to bedroom
-            local nm   = obj.name as string
-            local rType = "bedroom"
-            local nmL  = toLower nm
-            if (findString nmL "living") != undefined or (findString nmL "lounge") != undefined do rType = "livingroom"
-            if (findString nmL "dining") != undefined do rType = "livingroom"
-
-            -- Avoid duplicates
-            local dup = false
-            for r in gFP_Rooms where r.nodeName == nm do dup = true
-            if not dup do (
-                append gFP_Rooms (FP_Room nodeName:nm roomType:rType)
-                added += 1
-            )
+    on btn_setRoom pressed do (
+        -- Accept the first selected object; replace any existing room entry.
+        local obj = selection[1]
+        if obj == undefined do (
+            messageBox "Select a closed spline first." title:"Set Room"
+            return()
         )
-        fp_RefreshRoomList lb_rooms
-        if added == 0 do messageBox "Nothing new was added.\nTip: select a spline first." title:"Add Room"
-    )
+        local nm   = obj.name as string
+        local rType = "bedroom"
+        local nmL  = toLower nm
+        if (findString nmL "living") != undefined or (findString nmL "lounge") != undefined do rType = "livingroom"
+        if (findString nmL "dining") != undefined do rType = "livingroom"
 
-    on btn_remRoom pressed do (
-        local sel = lb_rooms.selection
-        if sel > 0 and sel <= gFP_Rooms.count do (
-            deleteItem gFP_Rooms sel
-            fp_RefreshRoomList lb_rooms
-            _updateDetail()
-        )
+        gFP_Rooms = #( FP_Room nodeName:nm roomType:rType )
+        _updateRoomDisplay()
+        _notifyFurnList()
     )
 
     on btn_clrRoom pressed do (
-        if queryBox "Remove all rooms?" title:"Confirm" do (
+        if queryBox "Clear the active room?" title:"Confirm" do (
             gFP_Rooms = #()
-            fp_RefreshRoomList lb_rooms
-            _updateDetail()
+            _updateRoomDisplay()
+            _notifyFurnList()
         )
     )
 
-    on lb_rooms selected i do _updateDetail()
-
     on ddl_rType selected i do (
-        local sel = lb_rooms.selection
-        if sel > 0 and sel <= gFP_Rooms.count do (
-            gFP_Rooms[sel].roomType = ddl_rType.items[i]
+        if gFP_Rooms.count > 0 do (
+            gFP_Rooms[1].roomType = ddl_rType.items[i]
+            _notifyFurnList()
         )
     )
 )
@@ -344,8 +375,11 @@ rollout ro_Rooms "2 · Room Boundaries" width:420
 rollout ro_Furniture "3 · Furniture Assets" width:420
 (
     label lbl_hint2 "Select furniture objects in the viewport, then click Add." align:#left
+    label lbl_legend "Grey = no training data for the active room type." align:#left
 
-    listbox lb_furn "" height:7 width:395 align:#center
+    -- .NET ListView for per-item colour control (grey-out unsupported categories)
+    dotNetControl lv_furn "System.Windows.Forms.ListView" height:140 width:395 align:#center
+
     button  btn_addFurn "Add Selected"  width:120 align:#left  across:3
     button  btn_remFurn "Remove"        width:90  align:#center
     button  btn_clrFurn "Clear All"     width:90  align:#right
@@ -356,9 +390,6 @@ rollout ro_Furniture "3 · Furniture Assets" width:420
 
         label           lbl_cat         "Category:" align:#left
         dropdownlist    ddl_cat         items:#() selection:1 width:220 align:#left
-
-        label           lbl_room        "Appears in room:" align:#left
-        dropdownlist    ddl_room        items:#("All Rooms") selection:1 width:220 align:#left
 
         label           lbl_copies      "Max copies placed:" align:#left
         spinner         spn_copies      "" range:[1,20,1] type:#integer fieldWidth:50 align:#left
@@ -371,38 +402,84 @@ rollout ro_Furniture "3 · Furniture Assets" width:420
         button          btn_applyItem   "Apply Changes" width:140 align:#left
     )
 
-    fn _furnitureDetail = (
-        local sel = lb_furn.selection
-        if sel == 0 or sel > gFP_Furniture.count do (
+    -- Helpers ------------------------------------------------------------------
+
+    fn _lvInit = (
+        -- Configure the ListView once on first open.
+        lv_furn.View = (dotNetClass "System.Windows.Forms.View").Details
+        lv_furn.FullRowSelect = true
+        lv_furn.MultiSelect   = false
+        lv_furn.HeaderStyle   = (dotNetClass "System.Windows.Forms.ColumnHeaderStyle").None
+        lv_furn.GridLines     = false
+        lv_furn.Columns.Clear()
+        lv_furn.Columns.Add "" 385
+    )
+
+    fn _lvRefresh = (
+        lv_furn.Items.Clear()
+        local roomType = fp_CurrentRoomType()
+        local gray  = (dotNetClass "System.Drawing.Color").Gray
+        local black = (dotNetClass "System.Drawing.Color").Black
+        for f in gFP_Furniture do (
+            local dupe = if f.maxCopies > 1 then ("  x" + f.maxCopies as string) else ""
+            local txt  = f.category + dupe + "  —  " + f.nodeName
+            local item = dotNetObject "System.Windows.Forms.ListViewItem" txt
+            if roomType != "" and not (fp_CatForRoom f.category roomType) do (
+                item.ForeColor = gray
+            )
+            lv_furn.Items.Add item
+        )
+    )
+
+    -- Public: called by ro_Rooms when room type changes.
+    fn _refreshFurnColors = ( _lvRefresh() )
+
+    fn _lvSelectedIndex = (
+        -- Returns 1-based index of the selected list item, or 0 if none.
+        if lv_furn.SelectedIndices.Count == 0 then return 0
+        lv_furn.SelectedIndices.Item[0] + 1
+    )
+
+    fn _furnitureDetailIdx idx = (
+        if idx == 0 or idx > gFP_Furniture.count do (
             lbl_fName.text = "—"
             return()
         )
-        local f = gFP_Furniture[sel]
+        local f = gFP_Furniture[idx]
         lbl_fName.text = f.nodeName
 
-        -- Set category dropdown
+        -- Category dropdown: show room-relevant cats first, then all.
+        local roomCats  = fp_CatsForCurrentRoom()
+        local extraCats = #()
+        for c in gFP_AllCats do (
+            local found = false
+            for rc in roomCats where rc == c do found = true
+            if not found do append extraCats c
+        )
+        local mergedCats = roomCats
+        for c in extraCats do append mergedCats c
+        ddl_cat.items = mergedCats
+
         local catIdx = 1
-        for i = 1 to gFP_AllCats.count where gFP_AllCats[i] == f.category do catIdx = i
+        for i = 1 to mergedCats.count where mergedCats[i] == f.category do catIdx = i
         ddl_cat.selection = catIdx
 
-        -- Set room dropdown
-        local roomItems = fp_RoomNames()
-        ddl_room.items = roomItems
-        local rIdx = 1
-        for i = 1 to roomItems.count where roomItems[i] == f.roomAssign do rIdx = i
-        ddl_room.selection = rIdx
-
-        spn_copies.value    = f.maxCopies
-        spn_rotOff.value    = f.rotOff
+        spn_copies.value = f.maxCopies
+        spn_rotOff.value = f.rotOff
     )
 
+    -- Events ------------------------------------------------------------------
+
     on ro_Furniture open do (
-        -- Migrate any legacy FP_Furn structs that pre-date the baseRotOffset
-        -- field before touching the list (prevents "Unknown property" crash).
         fp_MigrateFurniture()
-        ddl_cat.items = gFP_AllCats
-        fp_RefreshFurnList lb_furn
-        _furnitureDetail()
+        _lvInit()
+        _lvRefresh()
+        _furnitureDetailIdx (_lvSelectedIndex())
+    )
+
+    on lv_furn SelectedIndexChanged do (
+        local idx = _lvSelectedIndex()
+        _furnitureDetailIdx idx
     )
 
     on btn_addFurn pressed do (
@@ -412,7 +489,6 @@ rollout ro_Furniture "3 · Furniture Assets" width:420
             local dup = false
             for f in gFP_Furniture where f.nodeName == nm do dup = true
             if not dup do (
-                -- Auto-detect category via Python tag_mapper
                 local catCode = (
                     "import sys; sys.path.insert(0, '" + fp_PyPath() + "')\n" +
                     "from layoutgpt_bridge.tag_mapper import normalize_tag\n" +
@@ -424,45 +500,48 @@ rollout ro_Furniture "3 · Furniture Assets" width:420
                 added += 1
             )
         )
-        fp_RefreshFurnList lb_furn
+        _lvRefresh()
         if added == 0 do messageBox "Nothing new was added.\nTip: select furniture objects first." title:"Add Furniture"
-        -- Refresh room dropdown in detail panel
-        ddl_room.items = fp_RoomNames()
     )
 
     on btn_remFurn pressed do (
-        local sel = lb_furn.selection
-        if sel > 0 and sel <= gFP_Furniture.count do (
-            deleteItem gFP_Furniture sel
-            fp_RefreshFurnList lb_furn
-            _furnitureDetail()
+        local idx = _lvSelectedIndex()
+        if idx > 0 and idx <= gFP_Furniture.count do (
+            deleteItem gFP_Furniture idx
+            _lvRefresh()
+            lbl_fName.text = "—"
         )
     )
 
     on btn_clrFurn pressed do (
         if queryBox "Remove all furniture?" title:"Confirm" do (
             gFP_Furniture = #()
-            fp_RefreshFurnList lb_furn
-            _furnitureDetail()
+            _lvRefresh()
+            lbl_fName.text = "—"
         )
     )
 
-    on lb_furn selected i do (
-        ddl_cat.items  = gFP_AllCats
-        ddl_room.items = fp_RoomNames()
-        _furnitureDetail()
-    )
-
     on btn_applyItem pressed do (
-        local sel = lb_furn.selection
-        if sel > 0 and sel <= gFP_Furniture.count do (
-            gFP_Furniture[sel].category     = gFP_AllCats[ddl_cat.selection]
-            local roomItems = fp_RoomNames()
-            local rSel      = ddl_room.selection
-            gFP_Furniture[sel].roomAssign   = if rSel == 1 then "all" else roomItems[rSel]
-            gFP_Furniture[sel].maxCopies    = spn_copies.value as integer
-            gFP_Furniture[sel].rotOff       = spn_rotOff.value as integer
-            fp_RefreshFurnList lb_furn
+        local idx = _lvSelectedIndex()
+        if idx > 0 and idx <= gFP_Furniture.count do (
+            -- Resolve the selected category from the current (filtered) dropdown items.
+            local roomCats  = fp_CatsForCurrentRoom()
+            local extraCats = #()
+            for c in gFP_AllCats do (
+                local found = false
+                for rc in roomCats where rc == c do found = true
+                if not found do append extraCats c
+            )
+            local mergedCats = roomCats
+            for c in extraCats do append mergedCats c
+
+            local cSel = ddl_cat.selection
+            if cSel >= 1 and cSel <= mergedCats.count do
+                gFP_Furniture[idx].category = mergedCats[cSel]
+
+            gFP_Furniture[idx].maxCopies = spn_copies.value as integer
+            gFP_Furniture[idx].rotOff    = spn_rotOff.value as integer
+            _lvRefresh()
         )
     )
 )
@@ -632,7 +711,7 @@ rollout ro_Generate "4 · Generate" width:420
 -------------------------------------------------------------------------------
 if (fp_Floater != undefined) do ( try (closeRolloutFloater fp_Floater) catch() )
 global fp_Floater
-fp_Floater = newRolloutFloater "LayoutGPT Furniture Placer  v2" 440 820
+fp_Floater = newRolloutFloater "LayoutGPT Furniture Placer  v3" 440 820
 
 addRollout ro_Setup     fp_Floater
 addRollout ro_Rooms     fp_Floater

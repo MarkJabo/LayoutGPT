@@ -630,12 +630,10 @@ class LayoutGPTRunner:
 
             break  # no overlaps, or retries exhausted
 
-        # Snap nightstands to be mathematically adjacent to the bed, then
-        # strip any remaining overlaps from the final layout.
-        if results:
-            _snap_nightstands_to_bed(
-                results[0], formatter.room_px_length, formatter.room_px_width,
-                formatter)
+        # Strip any remaining overlaps from the final layout deterministically.
+        # The LLM's training data is responsible for producing correct spatial
+        # relationships — custom post-processing that moves items overrides that
+        # learned behaviour and produces incorrect results.
         results = [_remove_overlapping_placements(pl) for pl in results]
 
         return results
