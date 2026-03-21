@@ -275,6 +275,27 @@ def _required_items_block(
     all_lines = required_lines + optional_lines
     item_list = "\n".join(all_lines)
     total_required = len(required_lines) + len(optional_lines)  # at least 1 per category
+    # Add relationship reminders for common furniture pairs
+    relationship_notes: list[str] = []
+    has_bed = "double_bed" in available_furniture or "single_bed" in available_furniture
+    if has_bed and "nightstand" in available_furniture:
+        bed_cat = "double_bed" if "double_bed" in available_furniture else "single_bed"
+        relationship_notes.append(
+            f"• Each nightstand must touch a side of the {bed_cat} (no gap): "
+            f"nightstand_left = {bed_cat}_left ± ({bed_cat}_length/2 + nightstand_length/2), "
+            f"nightstand_top = {bed_cat}_top."
+        )
+    if "coffee_table" in available_furniture:
+        seating = [c for c in ("sofa", "multi_seat_sofa", "armchair", "chair")
+                   if c in available_furniture]
+        if seating:
+            relationship_notes.append(
+                f"• Place the coffee_table in front of / between the seating "
+                f"({', '.join(seating)}), not isolated in the middle of the room."
+            )
+    note_str = ("\nPlacement relationships:\n" + "\n".join(relationship_notes) + "\n") \
+        if relationship_notes else ""
+
     return (
         f"IMPORTANT: Output CSS lines for the following items:\n"
         f"{item_list}\n"
@@ -284,6 +305,7 @@ def _required_items_block(
         "Do NOT add items not listed above.\n"
         "Multiple copies of the same category must be well-separated "
         "from each other and clearly spaced from other furniture.\n"
+        f"{note_str}"
     )
 
 
@@ -327,10 +349,26 @@ def _build_system_prompt(
         f"FURNITURE {{length: ?{_UNIT}; width: ?{_UNIT}; height: ?{_UNIT}; "
         f"left: ?{_UNIT}; top: ?{_UNIT}; depth: ?{_UNIT}; orientation: ? degrees;}}\n"
         f"All values are in {_UNIT_NAME} but the orientation angle is in degrees.\n\n"
-        # --- Minimal coordinate note (the paper's ICL examples taught this implicitly;
-        #     we spell it out once since we have fewer examples) ---
+        # --- Coordinate convention + layout rules ---
         "Note: left and top are the CENTRE of the item's floor footprint. "
         "depth = 0 for all floor-standing furniture.\n\n"
+        "Layout rules (follow precisely):\n"
+        "1. BOUNDARY: every item must stay fully inside the room. "
+        "For an item at centre (left, top): "
+        "left ≥ length/2  AND  left ≤ room_length − length/2; "
+        "top  ≥ width/2   AND  top  ≤ room_width  − width/2.\n"
+        "2. WALL PLACEMENT: bed, shelf, wardrobe, and desk should be placed "
+        "flush against a wall. Flush means the near edge of the item is ≤ 2 px "
+        "from the wall, so centre = half_dimension from the wall. "
+        "Example: a bed with width=66 against the top wall → top = 33.\n"
+        "3. NIGHTSTAND ADJACENCY: each nightstand must be placed immediately "
+        "touching one side of the double_bed with no gap. "
+        "Formula: nightstand_left = bed_left ± (bed_length/2 + nightstand_length/2); "
+        "nightstand_top = bed_top. "
+        "Example: bed at left=128, length=66 → left nightstand left=128−33−10=85; "
+        "right nightstand left=128+33+10=171.\n"
+        "4. NO GAPS: avoid large empty gaps between furniture and walls or "
+        "between related items (bed+nightstands, sofa+coffee_table).\n\n"
         # --- Asset sizes (replaces the paper's dataset-statistics-derived sizes) ---
         f"{size_block}"
         # --- Category list and frequencies (verbatim from the paper) ---
