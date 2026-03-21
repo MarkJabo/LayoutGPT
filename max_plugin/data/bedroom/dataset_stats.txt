@@ -3,7 +3,8 @@
     "double_bed", "nightstand", "wardrobe", "ceiling_lamp", "desk",
     "chair", "cabinet", "chest_of_drawers", "floor_lamp", "shelf",
     "armchair", "single_bed", "pendant_lamp", "stool", "tv_stand",
-    "vanity", "coffee_table", "bookcase", "sofa", "kids_bed", "bunk_bed"
+    "vanity", "coffee_table", "bookcase", "sofa", "kids_bed", "bunk_bed",
+    "corner_side_table", "desk_chair", "dressing_table"
   ],
   "class_frequencies": {
     "double_bed": 0.60,
@@ -26,6 +27,9 @@
     "bookcase": 0.08,
     "sofa": 0.08,
     "kids_bed": 0.05,
-    "bunk_bed": 0.04
+    "bunk_bed": 0.04,
+    "corner_side_table": 0.10,
+    "desk_chair": 0.08,
+    "dressing_table": 0.06
   }
 }

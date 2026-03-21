@@ -613,6 +613,14 @@ class LayoutGPTRunner:
 
     def _parse_response(self, content: str, formatter: RoomFormatter) -> list[Placement]:
         print(f"[LayoutGPTRunner] Raw LLM response:\n{content}")
+        # Collapse multi-line CSS blocks into single lines so the parser handles
+        # both "FURNITURE {field: val; ...}" (paper format) and the multi-line
+        # format that GPT-4o and other modern LLMs often emit.
+        content = re.sub(
+            r'\{[^}]+\}',
+            lambda m: '{' + ' '.join(m.group(0)[1:-1].split()) + '}',
+            content,
+        )
         placements: list[Placement] = []
         for line in content.splitlines():
             line = line.strip()
@@ -671,12 +679,30 @@ def filter_stats_to_available(
     """
     Filter full dataset stats down to only categories that exist in the scene.
 
+    Categories that exist in the scene but NOT in dataset_stats are kept at a
+    default frequency (0.1) so user-registered furniture is never silently
+    dropped.  Stats-ordered categories appear first; unrecognised categories
+    are appended in the order they were registered.
+
     Returns (filtered_object_types, filtered_class_frequencies).
     """
-    avail_set = set(available_categories)
-    filtered_types = [t for t in stats["object_types"] if t in avail_set]
-    filtered_freq  = {
-        k: v for k, v in stats["class_frequencies"].items() if k in avail_set
+    avail_set  = set(available_categories)
+    stats_set  = set(stats["object_types"])
+
+    # Stats-ordered categories that are also in the scene
+    filtered_types: list[str] = [t for t in stats["object_types"] if t in avail_set]
+
+    # User categories not in stats – preserve them so they reach the LLM
+    seen = set(filtered_types)
+    for cat in available_categories:
+        if cat not in seen:
+            filtered_types.append(cat)
+            seen.add(cat)
+
+    # Frequency dict: use stats values where available, fall back to 0.1
+    filtered_freq: dict[str, float] = {
+        cat: stats["class_frequencies"].get(cat, 0.1)
+        for cat in filtered_types
     }
     return filtered_types, filtered_freq
 
