@@ -180,6 +180,48 @@ def _remove_overlapping_placements(
     return kept
 
 
+_BED_CATEGORIES    = {"double_bed", "single_bed"}
+_NS_CATEGORIES     = {"nightstand"}
+
+
+def _snap_nightstands_to_bed(
+    placements: list["Placement"],
+    room_length_px: int,
+    room_width_px: int,
+) -> list["Placement"]:
+    """
+    Deterministically move nightstands to be immediately adjacent to the bed.
+
+    The LLM consistently places nightstands a few pixels too close (overlapping
+    the bed) because it can't do half-dimension arithmetic reliably. This snaps
+    them to the mathematically correct touching position.
+
+    - nightstand_1 goes to the LEFT side of the bed
+    - nightstand_2 goes to the RIGHT side of the bed
+    - positions are clamped to room bounds; if a side doesn't fit, it stays put
+    """
+    bed = next((p for p in placements if p.category in _BED_CATEGORIES), None)
+    nightstands = [p for p in placements if p.category in _NS_CATEGORIES]
+    if bed is None or not nightstands:
+        return placements
+
+    bed_cx   = bed.px["left"]
+    bed_cy   = bed.px["top"]
+    bed_half = bed.px["length"] / 2.0
+
+    sides = [("left", -1), ("right", +1)]
+    for ns, (side, sign) in zip(nightstands, sides):
+        ns_half = ns.px["length"] / 2.0
+        new_cx  = bed_cx + sign * (bed_half + ns_half)
+        # Clamp to room bounds
+        lo = ns_half
+        hi = room_length_px - ns_half
+        if lo <= new_cx <= hi:
+            ns.px["left"] = new_cx
+            ns.px["top"]  = bed_cy
+    return placements
+
+
 def _overlapping_pairs_px(
     placements: list["Placement"],
     margin_px: float = 2.0,
@@ -274,28 +316,6 @@ def _required_items_block(
             )
     all_lines = required_lines + optional_lines
     item_list = "\n".join(all_lines)
-    total_required = len(required_lines) + len(optional_lines)  # at least 1 per category
-    # Add relationship reminders for common furniture pairs
-    relationship_notes: list[str] = []
-    has_bed = "double_bed" in available_furniture or "single_bed" in available_furniture
-    if has_bed and "nightstand" in available_furniture:
-        bed_cat = "double_bed" if "double_bed" in available_furniture else "single_bed"
-        relationship_notes.append(
-            f"• Each nightstand must touch a side of the {bed_cat} (no gap): "
-            f"nightstand_left = {bed_cat}_left ± ({bed_cat}_length/2 + nightstand_length/2), "
-            f"nightstand_top = {bed_cat}_top."
-        )
-    if "coffee_table" in available_furniture:
-        seating = [c for c in ("sofa", "multi_seat_sofa", "armchair", "chair")
-                   if c in available_furniture]
-        if seating:
-            relationship_notes.append(
-                f"• Place the coffee_table in front of / between the seating "
-                f"({', '.join(seating)}), not isolated in the middle of the room."
-            )
-    note_str = ("\nPlacement relationships:\n" + "\n".join(relationship_notes) + "\n") \
-        if relationship_notes else ""
-
     return (
         f"IMPORTANT: Output CSS lines for the following items:\n"
         f"{item_list}\n"
@@ -305,7 +325,6 @@ def _required_items_block(
         "Do NOT add items not listed above.\n"
         "Multiple copies of the same category must be well-separated "
         "from each other and clearly spaced from other furniture.\n"
-        f"{note_str}"
     )
 
 
@@ -349,26 +368,9 @@ def _build_system_prompt(
         f"FURNITURE {{length: ?{_UNIT}; width: ?{_UNIT}; height: ?{_UNIT}; "
         f"left: ?{_UNIT}; top: ?{_UNIT}; depth: ?{_UNIT}; orientation: ? degrees;}}\n"
         f"All values are in {_UNIT_NAME} but the orientation angle is in degrees.\n\n"
-        # --- Coordinate convention + layout rules ---
+        # --- Coordinate convention ---
         "Note: left and top are the CENTRE of the item's floor footprint. "
         "depth = 0 for all floor-standing furniture.\n\n"
-        "Layout rules (follow precisely):\n"
-        "1. BOUNDARY: every item must stay fully inside the room. "
-        "For an item at centre (left, top): "
-        "left ≥ length/2  AND  left ≤ room_length − length/2; "
-        "top  ≥ width/2   AND  top  ≤ room_width  − width/2.\n"
-        "2. WALL PLACEMENT: bed, shelf, wardrobe, and desk should be placed "
-        "flush against a wall. Flush means the near edge of the item is ≤ 2 px "
-        "from the wall, so centre = half_dimension from the wall. "
-        "Example: a bed with width=66 against the top wall → top = 33.\n"
-        "3. NIGHTSTAND ADJACENCY: each nightstand must be placed immediately "
-        "touching one side of the double_bed with no gap. "
-        "Formula: nightstand_left = bed_left ± (bed_length/2 + nightstand_length/2); "
-        "nightstand_top = bed_top. "
-        "Example: bed at left=128, length=66 → left nightstand left=128−33−10=85; "
-        "right nightstand left=128+33+10=171.\n"
-        "4. NO GAPS: avoid large empty gaps between furniture and walls or "
-        "between related items (bed+nightstands, sofa+coffee_table).\n\n"
         # --- Asset sizes (replaces the paper's dataset-statistics-derived sizes) ---
         f"{size_block}"
         # --- Category list and frequencies (verbatim from the paper) ---
@@ -626,8 +628,11 @@ class LayoutGPTRunner:
 
             break  # no overlaps, or retries exhausted
 
-        # Deterministic fallback: strip any remaining overlaps so nothing is
-        # ever placed on top of another item, even if the LLM ignored the hints.
+        # Snap nightstands to be mathematically adjacent to the bed, then
+        # strip any remaining overlaps from the final layout.
+        if results:
+            _snap_nightstands_to_bed(
+                results[0], formatter.room_px_length, formatter.room_px_width)
         results = [_remove_overlapping_placements(pl) for pl in results]
 
         return results
@@ -839,6 +844,7 @@ def _load_one_room_boxes(
         f"Condition:\n"
         f"Room Type: {room_type}\n"
         f"Room Size: max length {length_px}px, max width {width_px}px\n"
+        f"Constraints: left must be 0\u2013{length_px}px; top must be 0\u2013{width_px}px\n"
     )
 
     layout = ""
