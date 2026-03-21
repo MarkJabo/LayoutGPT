@@ -362,6 +362,9 @@ class LayoutGPTRunner:
                 for i, ex in enumerate(few_shot_examples):
                     cond_first_line = ex.get("condition", "").strip().split("\n")[-1]
                     print(f"  [{i+1}] {cond_first_line}")
+                    for layout_line in ex.get("layout", "").splitlines():
+                        if layout_line.strip():
+                            print(f"       {layout_line.strip()}")
             elif train_examples:
                 few_shot_examples = select_similar_examples(
                     train_examples,
@@ -635,10 +638,12 @@ def _load_one_room_boxes(
             dx = int(dx / norm * scale)
             dy = int(dy / norm * scale)
             dz = int(dz / norm * scale)
+        # Field order matches run_layoutgpt_3d.py load_room_boxes() exactly
+        # (px format): length, width, height, left, top, depth, orientation
         layout += (
             f"{cat} {{length: {l}px; width: {w}px; height: {h}px; "
-            f"orientation: {orientation} degrees; "
-            f"left: {dx}px; top: {dy}px; depth: {dz}px;}}\n"
+            f"left: {dx}px; top: {dy}px; depth: {dz}px; "
+            f"orientation: {orientation} degrees;}}\n"
         )
 
     feature = _resize_bitmap(data["room_layout"], 64)

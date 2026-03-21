@@ -295,29 +295,45 @@ class PlacementEngine:
                           f"rot={total_deg:.1f}°  "
                           f"world_offset=({offset_x:.1f},{offset_y:.1f})")
 
-                    # Position: move pivot so bbox-center lands at desired position
-                    _set_position(inst,
-                                   pl.scene["pos_x"] - offset_x,
-                                   pl.scene["pos_y"] - offset_y,
-                                   pl.scene["pos_z"])
+                    # Pre-compute floor-snap Z from prototype data BEFORE touching
+                    # the instance.  Reading node.pos after _set_z_rotation(±180°)
+                    # returns negated X/Y due to a pymxs edge case; computing Z here
+                    # (from the prototype's stable bbox, not the instance) avoids that.
+                    if self.snap_to_floor:
+                        try:
+                            proto_z          = float(asset.node.pos.z)
+                            bbox_minz        = float(asset.bbox.min_z)
+                            pivot_to_bottom  = proto_z - bbox_minz
+                            final_z          = float(room.bbox.min_z) + pivot_to_bottom
+                            print(f"[PlacementEngine] {inst_name} floor-snap: "
+                                  f"proto_z={proto_z:.1f}  bbox_min_z={bbox_minz:.1f}  "
+                                  f"pivot_to_bottom={pivot_to_bottom:.1f}  "
+                                  f"→ z={final_z:.1f}")
+                        except Exception as exc:
+                            print(f"[PlacementEngine] WARN floor-snap Z: {exc} – using floor")
+                            final_z = float(room.bbox.min_z)
+                    else:
+                        final_z = pl.scene["pos_z"]
 
-                    # Rotation: LLM angle + per-asset import-direction correction
+                    # Apply rotation FIRST, then scale, then position LAST.
+                    # Setting position last means we never read node.pos after
+                    # rotation, so the ±180° pymxs negation bug cannot occur.
                     _set_z_rotation(inst, total_deg)
 
-                    # Optional scale-to-fit (pass total rotation for axis correction)
                     if self.scale_to_fit:
                         _scale_to_fit(inst, asset, pl.scene, rotation_deg=total_deg)
 
-                    # Snap base to floor using prototype's stable pre-computed bbox
-                    if self.snap_to_floor:
-                        _place_on_floor(inst, room, asset=asset)
+                    _set_position(inst,
+                                  pl.scene["pos_x"] - offset_x,
+                                  pl.scene["pos_y"] - offset_y,
+                                  final_z)
 
                 placed_nodes.append(inst)
                 result.placed.append(inst_name)
                 final_pos = inst.pos
                 print(f"[PlacementEngine] Placed {inst_name} at "
                       f"({float(final_pos.x):.1f}, {float(final_pos.y):.1f}, {float(final_pos.z):.1f}) "
-                      f"rot={pl.scene['rotation_deg']:.1f}°")
+                      f"rot={total_deg:.1f}°")
             except Exception as exc:
                 print(f"[PlacementEngine] ERROR placing {inst_name}: {exc}")
                 result.skipped.append(pl.category)
