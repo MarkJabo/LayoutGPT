@@ -98,10 +98,16 @@ def _set_z_rotation(node, degrees: float) -> None:
     node.rotation = rt.eulerToQuat(rot)
 
 
-def _scale_to_fit(node, asset: FurnitureAsset, target: dict[str, float]) -> None:
+def _scale_to_fit(node, asset: FurnitureAsset, target: dict[str, float],
+                  rotation_deg: float = 0.0) -> None:
     """
     Non-uniformly scale the instance so its bounding box matches the LLM target
     dimensions (dim_x, dim_y, dim_z in scene units).
+
+    Rotation correction: the LLM's length/width are expressed in IMAGE space
+    (after the final rotation), but node.scale acts in MODEL-LOCAL space (before
+    rotation).  At 90°/270° orientations, length↔width are visually swapped, so
+    we swap dim_x↔dim_y before computing scale factors to match the correct axis.
 
     Falls back to no scaling if the asset bbox is degenerate.
     """
@@ -114,6 +120,14 @@ def _scale_to_fit(node, asset: FurnitureAsset, target: dict[str, float]) -> None
     tgt_x = target["dim_x"]
     tgt_y = target["dim_y"]
     tgt_z = target["dim_z"]
+
+    # At 90°/270° the LLM's length (→ dim_x) and width (→ dim_y) are rotated
+    # relative to the asset's local X/Y axes.  Swap them so the right physical
+    # axis gets the right target size.
+    rot_mod = abs(float(rotation_deg)) % 180.0
+    if abs(rot_mod - 90.0) < 45.0:   # covers 45–135° and 225–315°
+        tgt_x, tgt_y = tgt_y, tgt_x
+
     if tgt_x < 1e-6 or tgt_y < 1e-6 or tgt_z < 1e-6:
         return  # degenerate target – skip scaling
 
@@ -290,9 +304,9 @@ class PlacementEngine:
                     # Rotation: LLM angle + per-asset import-direction correction
                     _set_z_rotation(inst, total_deg)
 
-                    # Optional scale-to-fit
+                    # Optional scale-to-fit (pass total rotation for axis correction)
                     if self.scale_to_fit:
-                        _scale_to_fit(inst, asset, pl.scene)
+                        _scale_to_fit(inst, asset, pl.scene, rotation_deg=total_deg)
 
                     # Snap base to floor using prototype's stable pre-computed bbox
                     if self.snap_to_floor:
