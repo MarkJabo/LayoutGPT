@@ -56,9 +56,9 @@ from layoutgpt_bridge.tag_mapper       import layoutgpt_room_key
 # Default data directory: bundled alongside this file in max_plugin/data/
 _DEFAULT_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 
-# Splits JSON files (bedroom_splits.json / livingroom_splits.json) from the
-# LayoutGPT repo root — used to restrict ATISS loading to rect_train rooms.
-_SPLITS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "dataset", "3D")
+# Splits JSON files (bedroom_splits.json / livingroom_splits.json) bundled
+# inside max_plugin/data/ — used to restrict ATISS loading to rect_train rooms.
+_SPLITS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 
 BACKEND_URLS: dict[str, str | None] = {
     "ollama"  : "http://localhost:11434/v1",
