@@ -835,15 +835,17 @@ def _make_target_bitmap(length_px: int, width_px: int,
 
     Mirrors the room_layout field produced by ATISS preprocessing for
     axis-aligned rectangular rooms.  The shorter room dimension maps to
-    'canvas' pixels; the longer dimension scales proportionally (capped at
-    canvas).  The result is then resized to out×out.
+    exactly 'canvas' pixels; the longer dimension exceeds canvas
+    proportionally (same convention as load_room_boxes norm=min).
+    The resulting array (which may be wider than canvas×canvas) is
+    resized to out×out, correctly capturing the room's aspect ratio
+    for k-similar retrieval.
     """
     import numpy as _np
     norm = min(length_px, width_px)
-    L = min(int(round(length_px / norm * canvas)), canvas)
-    W = min(int(round(width_px  / norm * canvas)), canvas)
-    arr = _np.zeros((canvas, canvas), dtype=_np.uint8)
-    arr[:W, :L] = 255
+    L = int(round(length_px / norm * canvas))   # longer dim may exceed canvas
+    W = int(round(width_px  / norm * canvas))   # shorter dim = canvas exactly
+    arr = _np.full((W, L), 255, dtype=_np.uint8)
     return _resize_bitmap(arr, out)
 
 

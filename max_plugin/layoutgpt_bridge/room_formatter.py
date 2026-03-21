@@ -57,17 +57,21 @@ class RoomFormatter:
         self.room = room
         self.canvas_px = canvas_px
 
-        # The room's longer plan dimension maps to `canvas_px` pixels.
-        # We keep X and Y independently to handle non-square rooms.
+        # The original paper (run_layoutgpt_3d.py) normalises by the SHORTER
+        # plan dimension so that dimension maps to exactly canvas_px pixels and
+        # the longer dimension exceeds canvas_px proportionally.  All ATISS
+        # training examples were generated with this convention; the target
+        # room condition must use the same space or the LLM sees inconsistent
+        # pixel values relative to what it learned.
         plan_x = room.bbox.length_x   # scene units along X
         plan_y = room.bbox.length_y   # scene units along Y (depth)
-        longer = max(plan_x, plan_y)
+        shorter = min(plan_x, plan_y)
 
-        if longer == 0:
+        if shorter == 0:
             raise ValueError(f"Room '{room.name}' has zero plan extent – check spline.")
 
-        self._scale = canvas_px / longer          # scene_unit → px
-        self._inv_scale = longer / canvas_px      # px → scene_unit
+        self._scale = canvas_px / shorter         # scene_unit → px  (shorter dim = 256)
+        self._inv_scale = shorter / canvas_px     # px → scene_unit
 
         # px room dimensions (rounded to int like LayoutGPT does)
         self.room_px_length = int(round(plan_x * self._scale))
